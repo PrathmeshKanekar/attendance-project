@@ -1,0 +1,23 @@
+[Unit]
+Description=Smart Campus ERP Django App
+After=network.target postgresql.service
+
+[Service]
+Type=notify
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/smart_campus/backend
+Environment="DJANGO_SETTINGS_MODULE=config.settings.production"
+EnvironmentFile=/opt/smart_campus/.env
+ExecStart=/opt/smart_campus/venv/bin/gunicorn \
+    --config /opt/smart_campus/backend/gunicorn.conf.py \
+    config.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

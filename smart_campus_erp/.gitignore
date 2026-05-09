@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django
+*.sqlite3
+/media
+/static
+.env
+
+# MacOS
+.DS_Store
+
+# Node
+node_modules/
+
+# Flutter/Dart
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,31 @@
+# Core Django
+Django==4.2.13
+djangorestframework==3.15.1
+djangorestframework-simplejwt==5.3.1
+django-filter==23.5
+django-cors-headers==4.3.1
+
+# Database
+psycopg2-binary==2.9.9
+
+# Configuration
+python-decouple==3.8
+
+# Image processing
+Pillow==10.3.0
+
+# Face Recognition (open-source only)
+deepface==0.0.92
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+scipy==1.13.0
+
+# Reports
+reportlab==4.2.0
+openpyxl==3.1.4
+
+# Production server
+gunicorn==22.0.0
+
+# Utilities
+python-dateutil==2.9.0

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  backend:
+    volumes: []
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4
+    
+  celery:
+    volumes: []
+    
+  celery-beat:
+    volumes: []
+
+  # Database and Redis usually managed externally in production (e.g. Aiven/RDS)
+  # But retained here for full containerized stack if needed
