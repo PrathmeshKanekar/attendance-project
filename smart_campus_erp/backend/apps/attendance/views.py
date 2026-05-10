@@ -367,45 +367,62 @@ class ActiveSessionsView(APIView):
         user = request.user
 
         if user.role == 'student':
-            # Production Requirement: Only students in the selected Year and Division 
-            # should see the attendance session.
             try:
                 student_profile = user.student_profile
                 student_division = student_profile.division
-                student_year = student_profile.year_of_study
             except AttributeError:
                 return Response({'error': 'Student profile not found.'}, status=404)
 
             if not student_division:
                 return Response({'error': 'Student not assigned to any division.'}, status=400)
 
-            from apps.students.models import StudentSubjectEnrollment
-            
-            # Get all active sessions for the student's division and year
+            # Get all active sessions for the student's division
+            # We filter by division primarily. 
             sessions = AttendanceSession.objects.select_related(
                 'subject_allocation__subject',
                 'subject_allocation__teacher',
                 'subject_allocation__division',
                 'virtual_room',
             ).filter(
-                status                       = 'active',
-                subject_allocation__division   = student_division,
-                subject_allocation__division__year_of_study = student_year
+                status = 'active',
+                college = user.college,
+                subject_allocation__division = student_division,
             )
 
-            # Further filter by subject enrollment
-            enrolled_alloc_ids = StudentSubjectEnrollment.objects.filter(
+            # Get student's active enrollments to differentiate Core vs Elective if needed
+            # For now, we allow any student in the division to see the session
+            # but we can prioritize enrollment if records exist.
+            enrolled_alloc_ids = list(StudentSubjectEnrollment.objects.filter(
                 student   = student_profile,
                 is_active = True
-            ).values_list('subject_allocation_id', flat=True)
+            ).values_list('subject_allocation_id', flat=True))
 
             result = []
             for s in sessions:
-                # If the session is for a subject the student is enrolled in
+                # Visibility Logic:
+                # 1. Student is explicitly enrolled
+                # 2. OR the student belongs to the division and there are NO explicit enrollments 
+                #    for this allocation (treating it as a Core/Auto-enrolled subject)
+                
+                is_eligible = False
                 if s.subject_allocation_id in enrolled_alloc_ids:
+                    is_eligible = True
+                else:
+                    # Check if this allocation has ANY explicit enrollments.
+                    # If not, we treat it as a Core subject for the whole division.
+                    has_any_enrollments = StudentSubjectEnrollment.objects.filter(
+                        subject_allocation_id = s.subject_allocation_id,
+                        is_active = True
+                    ).exists()
+                    
+                    if not has_any_enrollments:
+                        is_eligible = True
+
+                if is_eligible:
                     already_marked = AttendanceLog.objects.filter(
                         session=s, student=user
                     ).exists()
+                    
                     data = AttendanceSessionSerializer(s).data
                     data['already_marked'] = already_marked
                     result.append(data)
@@ -489,15 +506,42 @@ class CheckLocationView(APIView):
         )
 
         room = session.virtual_room
+        
+        # Center coordinates for geo-validation
+        center_lat = float(room.center_lat) if room else float(session.teacher_lat or 0)
+        center_lng = float(room.center_lng) if room else float(session.teacher_lng or 0)
+        min_alt    = float(room.min_altitude) if room else 0.0
+        max_alt    = float(room.max_altitude) if room else 50.0
+
+        # We need a small helper to mock a room-like structure for the util if room is None
+        class MockRoom:
+            def __init__(self, clat, clng, ralt_min, ralt_max, rad):
+                self.center_lat = clat
+                self.center_lng = clng
+                self.min_altitude = ralt_min
+                self.max_altitude = ralt_max
+                self.radius_meters = rad
+
+        effective_room = room if room else MockRoom(center_lat, center_lng, min_alt, max_alt, session.radius_meters)
+
+        geo = check_inside_room(
+            float(data['lat']),
+            float(data['lng']),
+            float(data['altitude']),
+            effective_room,
+            horizontal_accuracy=float(data.get('accuracy', 10.0)),
+            custom_radius=float(session.radius_meters),
+        )
+
         logger.info(
             'GEO-CHECK: user=%s session=%s | '
             'student=(%.7f, %.7f, alt=%.1f) | '
-            'room_center=(%.7f, %.7f) radius_used=%.1fm effective_radius=%.1fm | '
+            'center=(%.7f, %.7f) radius_used=%.1fm | '
             'distance=%.2fm inside=%s alt_ok=%s',
             request.user.email, session.session_code,
             float(data['lat']), float(data['lng']), float(data['altitude']),
-            float(room.center_lat), float(room.center_lng), 
-            geo['radius_used'], geo['effective_radius'],
+            center_lat, center_lng, 
+            geo['radius_used'],
             geo['distance_from_center'], geo['inside'], geo['altitude_ok'],
         )
 
@@ -509,8 +553,8 @@ class CheckLocationView(APIView):
             'distance_from_center': geo['distance_from_center'],
             'session_code'        : session.session_code,
             'subject_name'        : session.subject_allocation.subject.name,
-            'room_name'           : room.name,
-            'room_radius_meters'  : room.radius_meters,
+            'room_name'           : room.name if room else 'Classroom Area',
+            'room_radius_meters'  : session.radius_meters,
         })
 
 
@@ -606,31 +650,59 @@ class MarkAttendanceView(APIView):
             )
 
         # ── STEP 1.5: Enrollment Check ─────────────────────
-        from apps.students.models import StudentSubjectEnrollment
-        is_enrolled = StudentSubjectEnrollment.objects.filter(
+        # Eligibility Logic: 
+        # 1. Student is explicitly enrolled
+        # 2. OR the student belongs to the division and there are NO explicit enrollments 
+        #    for this allocation (treating it as a Core/Auto-enrolled subject)
+        
+        is_eligible = StudentSubjectEnrollment.objects.filter(
             student            = profile,
             subject_allocation = session.subject_allocation,
             is_active          = True
         ).exists()
 
-        if not is_enrolled:
+        if not is_eligible:
+            # Fallback for Core subjects
+            has_any_enrollments = StudentSubjectEnrollment.objects.filter(
+                subject_allocation = session.subject_allocation,
+                is_active = True
+            ).exists()
+            if not has_any_enrollments:
+                is_eligible = True
+
+        if not is_eligible:
             return Response(
-                {'error': 'You are not enrolled in this subject.'},
+                {'error': 'You are not enrolled in this subject and it requires manual enrollment.'},
                 status=403,
             )
 
         # ── STEP 2: Geo validation ─────────────────────────
-        if session.virtual_room is None:
+        room = session.virtual_room
+        center_lat = float(room.center_lat) if room else float(session.teacher_lat or 0)
+        center_lng = float(room.center_lng) if room else float(session.teacher_lng or 0)
+        
+        if not room and (not session.teacher_lat or not session.teacher_lng):
             return Response(
-                {'error': 'No virtual room assigned to this session.'},
+                {'error': 'No geo-reference (room or teacher GPS) found for this session.'},
                 status=400,
             )
+
+        # Mock room if needed
+        class MockRoom:
+            def __init__(self, clat, clng, ralt_min, ralt_max, rad):
+                self.center_lat = clat
+                self.center_lng = clng
+                self.min_altitude = 0.0
+                self.max_altitude = 50.0
+                self.radius_meters = rad
+
+        effective_room = room if room else MockRoom(center_lat, center_lng, 0.0, 50.0, session.radius_meters)
 
         geo = check_inside_room(
             float(data['lat']),
             float(data['lng']),
             float(data['altitude']),
-            session.virtual_room,
+            effective_room,
             horizontal_accuracy=float(data.get('accuracy', 10.0)),
             custom_radius=float(session.radius_meters),
         )

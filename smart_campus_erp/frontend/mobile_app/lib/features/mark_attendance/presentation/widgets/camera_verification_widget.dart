@@ -69,7 +69,13 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
       
       if (faces.isNotEmpty) {
         final face = faces.first;
-        _checkBlink(face);
+        final isGoodPosition = _validateFacePosition(face, image);
+        
+        if (isGoodPosition) {
+          _checkBlink(face);
+        }
+      } else {
+        context.read<AttendanceCubit>().updateFaceGuidance("Face not detected", false);
       }
     } catch (e) {
       debugPrint('Error processing image: $e');
@@ -78,60 +84,106 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     }
   }
 
+  bool _validateFacePosition(Face face, CameraImage image) {
+    final boundingBox = face.boundingBox;
+    
+    // 1. Check Face Size (Must be close enough)
+    // Face width should be at least 30% of image width
+    final faceWidthRatio = boundingBox.width / image.width;
+    if (faceWidthRatio < 0.3) {
+      context.read<AttendanceCubit>().updateFaceGuidance("Move closer to camera", false);
+      return false;
+    }
+
+    // 2. Check Face Centering
+    final centerX = boundingBox.center.dx;
+    final centerY = boundingBox.center.dy;
+    
+    // Relative position (0.0 to 1.0)
+    final relX = centerX / image.width;
+    final relY = centerY / image.height;
+
+    // Must be in the central 40% of the screen
+    if (relX < 0.2 || relX > 0.8 || relY < 0.2 || relY > 0.8) {
+      context.read<AttendanceCubit>().updateFaceGuidance("Center your face", false);
+      return false;
+    }
+
+    context.read<AttendanceCubit>().updateFaceGuidance("Perfect! Now blink naturally", true);
+    return true;
+  }
+
   void _checkBlink(Face face) {
     final leftOpen = face.leftEyeOpenProbability ?? 1.0;
     final rightOpen = face.rightEyeOpenProbability ?? 1.0;
 
-    // Hysteresis thresholding for more natural blink detection
-    const closedThreshold = 0.25;
-    const openThreshold = 0.45;
+    // PRODUCTION-LEVEL HYSTERESIS
+    // Close threshold is strict (must close significantly)
+    // Open threshold is looser (must open reasonably)
+    const closedThresh = 0.20;
+    const openThresh   = 0.55;
     
-    // We consider a blink valid if EITHER eye closes significantly 
-    // (helps with glasses, hair, or shadows)
-    bool currentlyClosed = leftOpen < closedThreshold || rightOpen < closedThreshold;
+    // Liveness Detection State Machine
+    bool eitherClosed = leftOpen < closedThresh || rightOpen < closedThresh;
+    bool bothOpened   = leftOpen > openThresh && rightOpen > openThresh;
 
-    if (currentlyClosed && !_leftClosed && !_rightClosed) {
-      _leftClosed = true;
-      _rightClosed = true;
-    } else if (!currentlyClosed && leftOpen > openThreshold && rightOpen > openThreshold && _leftClosed && _rightClosed) {
-      _leftClosed = false;
-      _rightClosed = false;
-      _blinkCount++;
+    // Start of blink: either eye closes
+    if (eitherClosed && !_leftClosed && !_rightClosed) {
+      setState(() {
+        _leftClosed = true;
+        _rightClosed = true;
+      });
+      debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
+    } 
+    // End of blink: BOTH eyes must reopen to a reasonable level
+    // OR if we were closed and we detect a significant opening of either eye (handle glasses glare)
+    else if (_leftClosed && _rightClosed && (bothOpened || (leftOpen > 0.7 || rightOpen > 0.7))) {
+      setState(() {
+        _leftClosed = false;
+        _rightClosed = false;
+        _blinkCount++;
+      });
+      debugPrint("BLINK END: Count=$_blinkCount");
       context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
     }
   }
 
   InputImage? _inputImageFromCameraImage(CameraImage image) {
-    final sensorOrientation = _controller!.description.sensorOrientation;
-    InputImageRotation? rotation;
-    if (Platform.isAndroid) {
-      switch (sensorOrientation) {
-        case 90:  rotation = InputImageRotation.rotation90deg; break;
-        case 180: rotation = InputImageRotation.rotation180deg; break;
-        case 270: rotation = InputImageRotation.rotation270deg; break;
-        default:  rotation = InputImageRotation.rotation0deg; break;
+    try {
+      final sensorOrientation = _controller!.description.sensorOrientation;
+      InputImageRotation? rotation;
+      if (Platform.isAndroid) {
+        switch (sensorOrientation) {
+          case 90:  rotation = InputImageRotation.rotation90deg; break;
+          case 180: rotation = InputImageRotation.rotation180deg; break;
+          case 270: rotation = InputImageRotation.rotation270deg; break;
+          default:  rotation = InputImageRotation.rotation0deg; break;
+        }
       }
+      rotation ??= InputImageRotation.rotation0deg;
+
+      final format = InputImageFormatValue.fromRawValue(image.format.raw);
+      if (format == null) return null;
+
+      final WriteBuffer allBytes = WriteBuffer();
+      for (final Plane plane in image.planes) {
+        allBytes.putUint8List(plane.bytes);
+      }
+      final bytes = allBytes.done().buffer.asUint8List();
+
+      return InputImage.fromBytes(
+        bytes: bytes,
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: format,
+          bytesPerRow: image.planes[0].bytesPerRow,
+        ),
+      );
+    } catch (e) {
+      debugPrint("Error in _inputImageFromCameraImage: $e");
+      return null;
     }
-    rotation ??= InputImageRotation.rotation0deg;
-
-    final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    if (format == null) return null;
-
-    final WriteBuffer allBytes = WriteBuffer();
-    for (final Plane plane in image.planes) {
-      allBytes.putUint8List(plane.bytes);
-    }
-    final bytes = allBytes.done().buffer.asUint8List();
-
-    return InputImage.fromBytes(
-      bytes: bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: format,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      ),
-    );
   }
 
   @override
@@ -162,6 +214,31 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
                 
                 // Futuristic Overlay
                 _buildCameraOverlay(state),
+
+                // Guidance Overlay
+                if (state.currentStep == AttendanceStep.livenessDetection)
+                  Positioned(
+                    bottom: 20,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: state.isFaceCentered ? AppColors.success : AppColors.warning,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        state.faceGuidance ?? "Align your face...",
+                        style: TextStyle(
+                          color: state.isFaceCentered ? Colors.white : Colors.orangeAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
                 
                 // Liveness Indicator (Blinks)
                 Positioned(
@@ -169,28 +246,54 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
                   right: 20,
                   child: _BlinkIndicator(count: state.blinkCount),
                 ),
+
+                // Centering Guide (Static Crosshair)
+                if (state.currentStep == AttendanceStep.livenessDetection && !state.isFaceCentered)
+                  Opacity(
+                    opacity: 0.3,
+                    child: Container(
+                      width: 180,
+                      height: 180,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.white, width: 1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: Icon(Icons.add, color: Colors.white, size: 40),
+                      ),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 16),
             Text(
               state.currentStep == AttendanceStep.livenessDetection 
-                  ? 'Please blink 3 times to verify liveness'
-                  : 'Identity Matched. Ready for submission.',
+                  ? 'Blink detection helps us ensure you are a real person.'
+                  : 'Step complete. Proceed to final submission.',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 13),
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
             
-            if (state.currentStep == AttendanceStep.finalSubmission)
+            if (state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch)
               Padding(
                 padding: const EdgeInsets.only(top: 24),
                 child: ElevatedButton(
-                  onPressed: () => context.read<AttendanceCubit>().submitAttendance('dummy_embedding', {}),
+                  onPressed: state.stepStatuses[AttendanceStep.finalSubmission] == StepStatus.processing
+                      ? null
+                      : () => context.read<AttendanceCubit>().submitAttendance('dummy_embedding', {}),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.success,
                     minimumSize: const Size(double.infinity, 56),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    elevation: 4,
                   ),
-                  child: const Text('MARK ATTENDANCE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
+                  child: state.stepStatuses[AttendanceStep.finalSubmission] == StepStatus.processing
+                      ? const SizedBox(
+                          height: 24, 
+                          width: 24, 
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                        )
+                      : const Text('CONFIRM & MARK ATTENDANCE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
                 ),
               ),
           ],
@@ -200,21 +303,90 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   }
 
   Widget _buildCameraOverlay(AttendanceState state) {
+    bool isLivenessSuccess = state.stepStatuses[AttendanceStep.livenessDetection] == StepStatus.success;
+    bool isProcessing = state.stepStatuses[AttendanceStep.livenessDetection] == StepStatus.processing;
+
     return Container(
-      width: 250,
-      height: 250,
+      width: 260,
+      height: 260,
       decoration: BoxDecoration(
         border: Border.all(
-          color: state.stepStatuses[AttendanceStep.livenessDetection] == StepStatus.success 
-              ? AppColors.success.withOpacity(0.5) 
-              : AppColors.primaryLight.withOpacity(0.3),
-          width: 2,
+          color: isLivenessSuccess 
+              ? AppColors.success.withOpacity(0.8) 
+              : (state.isFaceCentered ? AppColors.primaryLight : Colors.white24),
+          width: 3,
         ),
         borderRadius: BorderRadius.circular(150),
+        boxShadow: [
+          if (isLivenessSuccess)
+            BoxShadow(color: AppColors.success.withOpacity(0.2), blurRadius: 20, spreadRadius: 5),
+        ],
       ),
-      child: state.stepStatuses[AttendanceStep.livenessDetection] == StepStatus.success 
-          ? const Icon(Icons.verified_user_rounded, color: AppColors.success, size: 60)
-          : null,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (isLivenessSuccess)
+            const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.verified_user_rounded, color: AppColors.success, size: 70),
+                SizedBox(height: 8),
+                Text("VERIFIED", style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, letterSpacing: 2)),
+              ],
+            ),
+          
+          if (!isLivenessSuccess && state.isFaceCentered)
+             const _ScanLine(),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanLine extends StatefulWidget {
+  const _ScanLine();
+
+  @override
+  State<_ScanLine> createState() => _ScanLineState();
+}
+
+class _ScanLineState extends State<_ScanLine> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Positioned(
+          top: 40 + (180 * _controller.value),
+          child: Container(
+            width: 200,
+            height: 2,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.primaryLight.withOpacity(0),
+                  AppColors.primaryLight,
+                  AppColors.primaryLight.withOpacity(0),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -226,20 +398,27 @@ class _BlinkIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.black45,
+        color: Colors.black87,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.primaryLight.withOpacity(0.5)),
+        border: Border.all(
+          color: count >= 3 ? AppColors.success : AppColors.primaryLight,
+          width: 1.5,
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.remove_red_eye_rounded, color: AppColors.primaryLight, size: 16),
+          Icon(
+            count >= 3 ? Icons.check_circle_rounded : Icons.remove_red_eye_rounded, 
+            color: count >= 3 ? AppColors.success : AppColors.primaryLight, 
+            size: 18,
+          ),
           const SizedBox(width: 8),
           Text(
             'BLINKS: $count / 3',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
           ),
         ],
       ),

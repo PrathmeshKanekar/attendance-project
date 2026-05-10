@@ -6,7 +6,7 @@ import '../../core/layout/app_layout.dart';
 import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/loading_widget.dart';
 import '../../core/widgets/empty_state_widget.dart';
-import '../teacher/teacher_providers.dart';
+import '../teacher/providers/teacher_providers.dart';
 import 'report_providers.dart';
 
 class DefaultersScreen extends ConsumerStatefulWidget {
@@ -34,7 +34,7 @@ class _DefaultersScreenState extends ConsumerState<DefaultersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final allocationsAsync = ref.watch(myAllocationsProvider);
+    final allocationsAsync = ref.watch(teacherAllocationsProvider);
     final defaultersAsync  = ref.watch(defaultersProvider(_params));
 
     return AppLayout(

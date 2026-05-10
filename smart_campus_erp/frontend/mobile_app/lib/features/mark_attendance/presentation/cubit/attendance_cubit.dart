@@ -12,6 +12,7 @@ class AttendanceCubit extends Cubit<AttendanceState> {
   AttendanceCubit(this._repository) : super(const AttendanceState());
 
   void initSession(Map<String, dynamic> session) {
+    if (isClosed) return;
     emit(state.copyWith(sessionData: session));
     _startVerificationFlow();
   }
@@ -19,10 +20,12 @@ class AttendanceCubit extends Cubit<AttendanceState> {
   Future<void> _startVerificationFlow() async {
     // 1. Session Check
     await _validateSession();
+    if (isClosed) return;
     if (state.stepStatuses[AttendanceStep.sessionCheck] != StepStatus.success) return;
 
     // 2. Device Security & ID Capture
     await _validateDevice();
+    if (isClosed) return;
     if (state.stepStatuses[AttendanceStep.deviceSecurity] != StepStatus.success) return;
 
     // 3. GPS & Geo Validation
@@ -30,8 +33,18 @@ class AttendanceCubit extends Cubit<AttendanceState> {
   }
 
   Future<void> _validateSession() async {
+    if (isClosed) return;
     _updateStep(AttendanceStep.sessionCheck, StepStatus.processing);
-    final res = await _repository.validateSession(state.sessionData['id'].toString());
+    
+    final sessionId = state.sessionData['id']?.toString();
+    if (sessionId == null) {
+      _failStep(AttendanceStep.sessionCheck, "Invalid session data.");
+      return;
+    }
+
+    final res = await _repository.validateSession(sessionId);
+    if (isClosed) return;
+
     res.fold(
       (err) => _failStep(AttendanceStep.sessionCheck, err),
       (data) => _updateStep(AttendanceStep.sessionCheck, StepStatus.success),
@@ -39,6 +52,7 @@ class AttendanceCubit extends Cubit<AttendanceState> {
   }
 
   Future<void> _validateDevice() async {
+    if (isClosed) return;
     _updateStep(AttendanceStep.deviceSecurity, StepStatus.processing);
     try {
       String deviceId = 'unknown';
@@ -46,7 +60,6 @@ class AttendanceCubit extends Cubit<AttendanceState> {
       
       if (kIsWeb) {
         final webInfo = await deviceInfo.webBrowserInfo;
-        // Use browser fingerprint or specific ID
         deviceId = 'web-${webInfo.userAgent.hashCode}';
       } else if (Platform.isAndroid) {
         final androidInfo = await deviceInfo.androidInfo;
@@ -59,21 +72,26 @@ class AttendanceCubit extends Cubit<AttendanceState> {
         deviceId = windowsInfo.deviceId;
       }
 
+      if (isClosed) return;
       emit(state.copyWith(deviceId: deviceId));
       _updateStep(AttendanceStep.deviceSecurity, StepStatus.success);
     } catch (e) {
+      if (isClosed) return;
       _failStep(AttendanceStep.deviceSecurity, "Security check failed: $e");
     }
   }
 
   Future<void> _validateGeo() async {
+    if (isClosed) return;
     _updateStep(AttendanceStep.gpsValidation, StepStatus.processing);
     try {
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 15),
       );
       
-      // Store coordinates in state for later use
+      if (isClosed) return;
+
       emit(state.copyWith(
         lat: pos.latitude,
         lng: pos.longitude,
@@ -89,6 +107,8 @@ class AttendanceCubit extends Cubit<AttendanceState> {
         sessionId: sessionId,
         accuracy: pos.accuracy,
       );
+
+      if (isClosed) return;
 
       res.fold(
         (err) => _failStep(AttendanceStep.gpsValidation, err),
@@ -120,26 +140,38 @@ class AttendanceCubit extends Cubit<AttendanceState> {
         },
       );
     } catch (e) {
+      if (isClosed) return;
       _failStep(AttendanceStep.gpsValidation, "Could not access GPS. Please enable location services.");
     }
   }
 
   void onBlinkDetected(int count) {
+    if (isClosed) return;
     emit(state.copyWith(blinkCount: count));
     if (count >= 3 && state.stepStatuses[AttendanceStep.livenessDetection] != StepStatus.success) {
       _updateStep(AttendanceStep.livenessDetection, StepStatus.success);
+      emit(state.copyWith(currentStep: AttendanceStep.faceMatch, faceGuidance: "Liveness Verified!"));
       emit(state.copyWith(currentStep: AttendanceStep.faceMatch));
     }
   }
 
+  void updateFaceGuidance(String? guidance, bool isCentered) {
+    if (isClosed) return;
+    if (state.faceGuidance == guidance && state.isFaceCentered == isCentered) return;
+    emit(state.copyWith(faceGuidance: guidance, isFaceCentered: isCentered));
+  }
+
   Future<void> onFaceMatched() async {
+    if (isClosed) return;
     _updateStep(AttendanceStep.faceMatch, StepStatus.processing);
     await Future.delayed(const Duration(seconds: 1)); 
+    if (isClosed) return;
     _updateStep(AttendanceStep.faceMatch, StepStatus.success);
     emit(state.copyWith(currentStep: AttendanceStep.finalSubmission));
   }
 
   Future<void> submitAttendance(String faceImageBase64, Map<String, dynamic> sensors) async {
+    if (isClosed) return;
     _updateStep(AttendanceStep.finalSubmission, StepStatus.processing);
     
     if (state.lat == null || state.lng == null || state.deviceId == null) {
@@ -159,6 +191,8 @@ class AttendanceCubit extends Cubit<AttendanceState> {
       extraSensors: sensors,
     );
 
+    if (isClosed) return;
+
     res.fold(
       (err) => _failStep(AttendanceStep.finalSubmission, err),
       (success) {
@@ -169,12 +203,14 @@ class AttendanceCubit extends Cubit<AttendanceState> {
   }
 
   void _updateStep(AttendanceStep step, StepStatus status) {
+    if (isClosed) return;
     final newStatuses = Map<AttendanceStep, StepStatus>.from(state.stepStatuses);
     newStatuses[step] = status;
     emit(state.copyWith(stepStatuses: newStatuses));
   }
 
   void _failStep(AttendanceStep step, String error) {
+    if (isClosed) return;
     final newStatuses = Map<AttendanceStep, StepStatus>.from(state.stepStatuses);
     newStatuses[step] = StepStatus.failed;
     emit(state.copyWith(stepStatuses: newStatuses, errorMessage: error));

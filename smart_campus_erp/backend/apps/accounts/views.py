@@ -396,9 +396,9 @@ class ListUsersView(APIView):
 
         if role:
             qs = qs.filter(role=role)
-        if is_approved is not None:
+        if is_approved is not None and is_approved != '':
             qs = qs.filter(is_approved=is_approved.lower() == 'true')
-        if is_active is not None:
+        if is_active is not None and is_active != '':
             qs = qs.filter(is_active=is_active.lower() == 'true')
         if search:
             qs = qs.filter(
@@ -478,7 +478,7 @@ class ApproveUserView(APIView):
 # POST /api/users/<id>/reject/
 # ─────────────────────────────────────────────
 class RejectUserView(APIView):
-    permission_classes = [IsPrincipal | IsCollegeAdmin | IsSuperAdmin]
+    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
 
     def post(self, request, user_id):
         reason = request.data.get('reason', '').strip()
@@ -670,9 +670,9 @@ class DeactivateUserView(APIView):
 class PendingApprovalsView(APIView):
     """
     Returns all pending users for the approver's college.
-    Used by Principal and College Admin.
+    Used by Principal, College Admin, and Lab Assistant.
     """
-    permission_classes = [IsPrincipal | IsCollegeAdmin | IsSuperAdmin]
+    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         qs = User.objects.select_related('college').filter(

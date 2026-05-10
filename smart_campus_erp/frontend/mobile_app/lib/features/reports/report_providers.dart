@@ -8,19 +8,24 @@ final studentMyAttendanceProvider =
   final authState = ref.watch(authProvider);
   if (authState is! AuthSuccess) return [];
 
-  final api = ref.read(apiClientProvider);
-  final res = await api.get('/api/reports/student/my-attendance/');
-  
-  if (res.data is List) {
-    return List<Map<String, dynamic>>.from(
-      (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
-    );
-  } else if (res.data is Map && res.data['subjects'] != null) {
-    return List<Map<String, dynamic>>.from(
-      (res.data['subjects'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
-    );
+  try {
+    final api = ref.read(apiClientProvider);
+    final res = await api.get('/api/reports/student/my-attendance/');
+    if (res.data == null) return [];
+    
+    if (res.data is List) {
+      return List<Map<String, dynamic>>.from(
+        (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
+      );
+    } else if (res.data is Map && res.data['subjects'] != null) {
+      return List<Map<String, dynamic>>.from(
+        (res.data['subjects'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
+      );
+    }
+    return [];
+  } catch (e) {
+    return [];
   }
-  return [];
 });
 
 // ── College overview (principal/HOD) ──────────────────────
@@ -29,9 +34,13 @@ final collegeOverviewProvider =
   final authState = ref.watch(authProvider);
   if (authState is! AuthSuccess) return {};
 
-  final api = ref.read(apiClientProvider);
-  final res = await api.get('/api/reports/college/overview/');
-  return Map<String, dynamic>.from(res.data as Map);
+  try {
+    final api = ref.read(apiClientProvider);
+    final res = await api.get('/api/reports/college/overview/');
+    return Map<String, dynamic>.from(res.data as Map);
+  } catch (e) {
+    return {};
+  }
 });
 
 // ── Teacher session history ────────────────────────────────
@@ -41,22 +50,28 @@ final teacherSessionHistoryProvider =
     final authState = ref.watch(authProvider);
     if (authState is! AuthSuccess) return [];
 
-    final api    = ref.read(apiClientProvider);
-    final params = <String, dynamic>{'limit': '20'};
-    if (allocationId != null) params['allocation_id'] = allocationId;
-    final res = await api.get('/api/reports/teacher/session-history/',
-        params: params);
-    
-    if (res.data is List) {
-      return List<Map<String, dynamic>>.from(
-        (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
-      );
-    } else if (res.data is Map && res.data['results'] != null) {
-      return List<Map<String, dynamic>>.from(
-        (res.data['results'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
-      );
+    try {
+      final api    = ref.read(apiClientProvider);
+      final params = <String, dynamic>{'limit': '20'};
+      if (allocationId != null) params['allocation_id'] = allocationId;
+      final res = await api.get('/api/reports/teacher/session-history/',
+          params: params);
+      
+      if (res.data == null) return [];
+
+      if (res.data is List) {
+        return List<Map<String, dynamic>>.from(
+          (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+      } else if (res.data is Map && res.data['results'] != null) {
+        return List<Map<String, dynamic>>.from(
+          (res.data['results'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+      }
+      return [];
+    } catch (e) {
+      return [];
     }
-    return [];
   },
 );
 
@@ -67,10 +82,14 @@ final attendanceSummaryProvider =
     final authState = ref.watch(authProvider);
     if (authState is! AuthSuccess) return {};
 
-    final api = ref.read(apiClientProvider);
-    final res = await api.get('/api/reports/attendance-summary/',
-        params: params);
-    return Map<String, dynamic>.from(res.data as Map);
+    try {
+      final api = ref.read(apiClientProvider);
+      final res = await api.get('/api/reports/attendance-summary/',
+          params: params);
+      return Map<String, dynamic>.from(res.data as Map);
+    } catch (e) {
+      return {};
+    }
   },
 );
 
@@ -81,8 +100,12 @@ final defaultersProvider =
     final authState = ref.watch(authProvider);
     if (authState is! AuthSuccess) return {};
 
-    final api = ref.read(apiClientProvider);
-    final res = await api.get('/api/reports/defaulters/', params: params);
-    return Map<String, dynamic>.from(res.data as Map);
+    try {
+      final api = ref.read(apiClientProvider);
+      final res = await api.get('/api/reports/defaulters/', params: params);
+      return Map<String, dynamic>.from(res.data as Map);
+    } catch (e) {
+      return {};
+    }
   },
 );

@@ -123,7 +123,7 @@ class SubjectAllocationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_teacher_name(self, obj):
-        return f'{obj.teacher.first_name} {obj.teacher.last_name}'
+        return obj.teacher.get_full_name()
 
     def get_enrollment_count(self, obj):
         from apps.students.models import StudentSubjectEnrollment

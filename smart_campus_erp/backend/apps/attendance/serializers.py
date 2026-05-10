@@ -39,7 +39,7 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
     def get_teacher_name(self, obj):
         if not obj.teacher:
             return None
-        return f'{obj.teacher.first_name} {obj.teacher.last_name}'
+        return obj.teacher.get_full_name()
 
     def get_room_name(self, obj):
         return obj.virtual_room.name if obj.virtual_room else None
@@ -67,7 +67,7 @@ class AttendanceLogSerializer(serializers.ModelSerializer):
     def get_student_name(self, obj):
         if not obj.student:
             return None
-        return f'{obj.student.first_name} {obj.student.last_name}'
+        return obj.student.get_full_name()
 
     def get_student_prn(self, obj):
         try:

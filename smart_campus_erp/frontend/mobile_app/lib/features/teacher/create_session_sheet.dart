@@ -5,7 +5,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/loading_widget.dart';
-import 'teacher_providers.dart';
+import 'providers/teacher_providers.dart';
 
 class CreateSessionSheet extends ConsumerStatefulWidget {
   final Map<String, dynamic>? preselectedAllocation;
@@ -24,6 +24,7 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
   DateTime _startTime = DateTime.now();
   DateTime _endTime   = DateTime.now().add(const Duration(hours: 1));
   double   _radius    = 30.0;
+  bool     _isLocating = false;
 
   @override
   void initState() {
@@ -33,10 +34,12 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final allocAsync  = ref.watch(myAllocationsProvider);
-    final roomsAsync  = ref.watch(virtualRoomsProvider);
+    final allocAsync  = ref.watch(teacherAllocationsProvider);
+    final roomsAsync  = ref.watch(teacherRoomsProvider);
     final sessionState = ref.watch(createSessionProvider);
-    final isLoading   = sessionState is CreateSessionLoading;
+    
+    // Combined loading state: either creating session or fetching GPS
+    final bool isLoading = (sessionState is CreateSessionLoading) || _isLocating;
 
     return Container(
       decoration: const BoxDecoration(
@@ -54,8 +57,6 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
             mainAxisSize     : MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-
-              // Handle
               Center(
                 child: Container(
                   width : 40, height: 4,
@@ -66,7 +67,6 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
                   ),
                 ),
               ),
-
               const Text(
                 'Start Attendance Session',
                 style: TextStyle(
@@ -77,7 +77,7 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
               ),
               const SizedBox(height: 20),
 
-              // Subject dropdown
+              // Subject
               const Text('Subject', style: TextStyle(
                 fontWeight: FontWeight.w600, fontSize: 14,
                 color     : AppColors.textPrimary,
@@ -102,10 +102,9 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
                   validator: (v) => v == null ? 'Select a subject' : null,
                 ),
               ),
-
               const SizedBox(height: 16),
 
-              // Virtual room dropdown
+              // Room
               const Text('Virtual Room', style: TextStyle(
                 fontWeight: FontWeight.w600, fontSize: 14,
                 color     : AppColors.textPrimary,
@@ -130,10 +129,9 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
                   validator: (v) => v == null ? 'Select a room' : null,
                 ),
               ),
-
               const SizedBox(height: 16),
 
-              // Time pickers
+              // Time
               Row(
                 children: [
                   Expanded(child: _timePicker(
@@ -149,10 +147,9 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
                   )),
                 ],
               ),
-
               const SizedBox(height: 16),
 
-              // Radius slider
+              // Radius
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -171,25 +168,30 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
               Slider(
                 value    : _radius,
                 min      : 10,
-                max      : 100,
-                divisions: 18,
+                max      : 150,
+                divisions: 14,
                 label    : '${_radius.round()}m',
                 activeColor: AppColors.primaryLight,
                 onChanged: (v) => setState(() => _radius = v),
               ),
-
               const SizedBox(height: 20),
 
-              // Submit button
-              isLoading
-                  ? const Center(child: CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation(AppColors.primaryLight),
-                  ))
-                  : ElevatedButton.icon(
-                      onPressed: _submit,
-                      icon     : const Icon(Icons.play_arrow_rounded),
-                      label    : const Text('Start Session'),
-                    ),
+              // Submit
+              SizedBox(
+                width: double.infinity,
+                child: isLoading
+                    ? const Center(child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation(AppColors.primaryLight),
+                      ))
+                    : ElevatedButton.icon(
+                        onPressed: _submit,
+                        icon     : const Icon(Icons.play_arrow_rounded),
+                        label    : Text(_isLocating ? 'Fetching GPS...' : 'Start Session'),
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 50),
+                        ),
+                      ),
+              ),
             ],
           ),
         ),
@@ -255,48 +257,69 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
       return;
     }
 
-    // ── CAPTURE TEACHER LIVE LOCATION ──
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    
-    Position pos = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.best,
-      timeLimit: const Duration(seconds: 10),
-    );
+    setState(() => _isLocating = true);
 
-    await ref.read(createSessionProvider.notifier).createSession({
-      'subject_allocation_id': _selectedAllocation!['id'],
-      'virtual_room_id'      : _selectedRoom!['id'],
-      'scheduled_start'      : _startTime.toIso8601String(),
-      'scheduled_end'        : _endTime.toIso8601String(),
-      'teacher_lat'          : pos.latitude,
-      'teacher_lng'          : pos.longitude,
-      'teacher_altitude'     : pos.altitude,
-      'teacher_accuracy'     : pos.accuracy,
-      'radius_meters'        : _radius,
-    });
-
-    if (!mounted) return;
-
-    final state = ref.read(createSessionProvider);
-    if (state is CreateSessionSuccess) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content        : Text(state.message),
-          backgroundColor: AppColors.success,
-        ),
+    try {
+      // ── CAPTURE TEACHER LIVE LOCATION ──
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+          throw 'Location permission denied';
+        }
+      }
+      
+      Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 15),
       );
-      ref.read(createSessionProvider.notifier).reset();
-    } else if (state is CreateSessionError) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content        : Text(state.message),
-          backgroundColor: AppColors.danger,
-        ),
-      );
+
+      await ref.read(createSessionProvider.notifier).createSession({
+        'subject_allocation_id': _selectedAllocation!['id'],
+        'virtual_room_id'      : _selectedRoom!['id'],
+        'scheduled_start'      : _startTime.toIso8601String(),
+        'scheduled_end'        : _endTime.toIso8601String(),
+        'teacher_lat'          : pos.latitude,
+        'teacher_lng'          : pos.longitude,
+        'teacher_altitude'     : pos.altitude,
+        'teacher_accuracy'     : pos.accuracy,
+        'radius_meters'        : _radius,
+      });
+
+      if (!mounted) return;
+
+      final state = ref.read(createSessionProvider);
+      if (state is CreateSessionSuccess) {
+        // CRITICAL: Refresh the dashboard list
+        ref.invalidate(mySessionsProvider);
+        
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content        : Text(state.message),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        ref.read(createSessionProvider.notifier).reset();
+      } else if (state is CreateSessionError) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content        : Text(state.message),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content        : Text('Location Error: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLocating = false);
     }
   }
 }

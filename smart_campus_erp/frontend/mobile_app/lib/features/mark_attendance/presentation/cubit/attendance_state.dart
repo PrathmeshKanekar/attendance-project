@@ -17,6 +17,8 @@ class AttendanceState extends Equatable {
   final AttendanceStep currentStep;
   final Map<AttendanceStep, StepStatus> stepStatuses;
   final String? errorMessage;
+  final String? faceGuidance;
+  final bool isFaceCentered;
   final double gpsAccuracy;
   final double distanceToRoom;
   final int blinkCount;
@@ -38,6 +40,8 @@ class AttendanceState extends Equatable {
       AttendanceStep.finalSubmission: StepStatus.pending,
     },
     this.errorMessage,
+    this.faceGuidance,
+    this.isFaceCentered = false,
     this.gpsAccuracy = 0.0,
     this.distanceToRoom = 0.0,
     this.blinkCount = 0,
@@ -53,6 +57,8 @@ class AttendanceState extends Equatable {
     AttendanceStep? currentStep,
     Map<AttendanceStep, StepStatus>? stepStatuses,
     String? errorMessage,
+    String? faceGuidance,
+    bool? isFaceCentered,
     double? gpsAccuracy,
     double? distanceToRoom,
     int? blinkCount,
@@ -67,6 +73,8 @@ class AttendanceState extends Equatable {
       currentStep: currentStep ?? this.currentStep,
       stepStatuses: stepStatuses ?? this.stepStatuses,
       errorMessage: errorMessage,
+      faceGuidance: faceGuidance ?? this.faceGuidance,
+      isFaceCentered: isFaceCentered ?? this.isFaceCentered,
       gpsAccuracy: gpsAccuracy ?? this.gpsAccuracy,
       distanceToRoom: distanceToRoom ?? this.distanceToRoom,
       blinkCount: blinkCount ?? this.blinkCount,
@@ -84,6 +92,8 @@ class AttendanceState extends Equatable {
         currentStep,
         stepStatuses,
         errorMessage,
+        faceGuidance,
+        isFaceCentered,
         gpsAccuracy,
         distanceToRoom,
         blinkCount,

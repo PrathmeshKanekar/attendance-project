@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:open_file/open_file.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -12,7 +12,7 @@ import '../../core/network/api_client.dart';
 import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/loading_widget.dart';
 import '../../core/widgets/empty_state_widget.dart';
-import '../teacher/teacher_providers.dart';
+import '../teacher/providers/teacher_providers.dart';
 import 'report_providers.dart';
 
 class TeacherReportsScreen extends ConsumerStatefulWidget {
@@ -83,7 +83,7 @@ class _TeacherReportsScreenState extends ConsumerState<TeacherReportsScreen> {
             content: Text('${type.toUpperCase()} downloaded successfully'),
             action: SnackBarAction(
               label: 'Open',
-              onPressed: () => OpenFile.open(savePath),
+              onPressed: () => OpenFilex.open(savePath),
             ),
           ),
         );
@@ -101,7 +101,7 @@ class _TeacherReportsScreenState extends ConsumerState<TeacherReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final allocationsAsync = ref.watch(myAllocationsProvider);
+    final allocationsAsync = ref.watch(teacherAllocationsProvider);
     final summaryAsync     = _selectedAllocationId != null 
         ? ref.watch(attendanceSummaryProvider(_params))
         : null;

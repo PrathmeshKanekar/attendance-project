@@ -7,7 +7,7 @@ import '../../core/network/api_client.dart';
 import '../../core/widgets/empty_state_widget.dart';
 import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/loading_widget.dart';
-import 'teacher_providers.dart';
+import 'providers/teacher_providers.dart';
 
 class SessionLogsScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> session;

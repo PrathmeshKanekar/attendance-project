@@ -44,11 +44,12 @@ class _TeacherDashboardBody extends ConsumerWidget {
         // CRITICAL FIX: only invalidate data providers
         ref.invalidate(mySessionsProvider);
         ref.invalidate(teacherAllocationsProvider);
-        await Future.wait([
+        
+        // Wait for both to complete
+        await Future.wait<dynamic>([
           ref.read(mySessionsProvider.future).catchError((_) => <String, dynamic>{}),
           ref.read(teacherAllocationsProvider.future).catchError((_) => <Map<String, dynamic>>[]),
         ]);
-
       },
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -300,149 +301,171 @@ class _ActiveSessionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Safe parsing with defaults
     final present = (session['present_count'] as num?)?.toInt() ?? 0;
     final total   = (session['total_students'] as num?)?.toInt() ?? 0;
-    final pct     = (session['attendance_pct']  as num?)?.toDouble() ?? 0.0;
+    final pct     = (session['attendance_pct']  as num?)?.toDouble() ?? 
+                    (total > 0 ? (present / total) * 100 : 0.0);
 
     return Container(
       margin    : const EdgeInsets.only(bottom: 12),
-      padding   : const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color       : AppColors.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border      : const Border(
-          left  : BorderSide(color: AppColors.success, width: 4),
-          top   : BorderSide(color: AppColors.borderColor),
-          right : BorderSide(color: AppColors.borderColor),
-          bottom: BorderSide(color: AppColors.borderColor),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              _PulsingDot(),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color       : AppColors.success.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'LIVE',
-                  style: TextStyle(
-                    color: AppColors.success, fontSize: 11,
-                    fontWeight: FontWeight.w800, letterSpacing: 1,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              Text(
-                'Code: ${session['session_code'] ?? ''}',
-                style: const TextStyle(
-                  color: AppColors.textSecondary, fontSize: 13,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            session['subject_name']?.toString() ?? 'Subject',
-            style: const TextStyle(
-              fontSize: 17, fontWeight: FontWeight.w700,
-              color   : AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Div ${session['division_name'] ?? ''} · '
-            'Year ${session['year_of_study'] ?? ''} · '
-            'Room: ${session['room_name'] ?? 'N/A'}',
-            style: const TextStyle(
-              color: AppColors.textSecondary, fontSize: 13,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '$present / $total present',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        Text(
-                          '${pct.toStringAsFixed(1)}%',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 14,
-                            color: AppColors.success,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child       : LinearProgressIndicator(
-                        value     : total > 0 ? present / total : 0,
-                        backgroundColor: AppColors.bgSecondary,
-                        valueColor : const AlwaysStoppedAnimation(
-                          AppColors.success,
-                        ),
-                        minHeight  : 8,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  style    : OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primaryLight,
-                    side           : const BorderSide(
-                      color: AppColors.primaryLight,
-                    ),
-                    minimumSize: const Size(0, 44),
-                  ),
-                  onPressed: onViewLogs,
-                  icon : const Icon(Icons.list_alt_rounded, size: 18),
-                  label: const Text('Logs'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  style    : ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.danger,
-                    minimumSize    : const Size(0, 44),
-                  ),
-                  onPressed: onEnd,
-                  icon : const Icon(
-                    Icons.stop_circle_rounded, size: 18,
-                  ),
-                  label: const Text('End'),
-                ),
-              ),
-            ],
+        border      : Border.all(color: AppColors.borderColor),
+        boxShadow   : [
+          BoxShadow(
+            color : Colors.black.withOpacity(0.03),
+            blurRadius: 10, offset: const Offset(0, 4),
           ),
         ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Colored Status Stripe (Replaces non-uniform border)
+              Container(
+                width: 6,
+                color: AppColors.success,
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _PulsingDot(),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color       : AppColors.success.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'LIVE',
+                              style: TextStyle(
+                                color: AppColors.success, fontSize: 11,
+                                fontWeight: FontWeight.w800, letterSpacing: 1,
+                              ),
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            'Code: ${session['session_code'] ?? 'N/A'}',
+                            style: const TextStyle(
+                              color: AppColors.textSecondary, fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        session['subject_name']?.toString() ?? 'Untitled Subject',
+                        style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold,
+                          color   : AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Div ${session['division_name'] ?? 'A'} · '
+                        'Year ${session['year_of_study'] ?? 'N/A'} · '
+                        'Room: ${session['room_name'] ?? 'N/A'}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary, fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '$present / $total present',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 14,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              Text(
+                                '${pct.toStringAsFixed(1)}%',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 14,
+                                  color: AppColors.success,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child       : LinearProgressIndicator(
+                              value     : total > 0 ? present / total : 0,
+                              backgroundColor: AppColors.bgSecondary,
+                              valueColor : const AlwaysStoppedAnimation(
+                                AppColors.success,
+                              ),
+                              minHeight  : 8,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style    : OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.primaryLight,
+                                side           : const BorderSide(
+                                  color: AppColors.primaryLight,
+                                ),
+                                minimumSize: const Size(0, 44),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              onPressed: onViewLogs,
+                              icon : const Icon(Icons.list_alt_rounded, size: 18),
+                              label: const Text('Logs'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style    : ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.danger,
+                                minimumSize    : const Size(0, 44),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              onPressed: onEnd,
+                              icon : const Icon(
+                                Icons.stop_circle_rounded, size: 18,
+                              ),
+                              label: const Text('End'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

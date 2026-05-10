@@ -1,6 +1,11 @@
+import os
+import base64
+import uuid
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.conf import settings
+from django.core.files.base import ContentFile
 from .models import StudentProfile, StudentSubjectEnrollment
 from apps.face_recognition.models import FaceRegistrationImage
 from apps.tenants.models import College
@@ -77,27 +82,19 @@ class StudentRegistrationSerializer(serializers.Serializer):
         )
 
         # ── Process and Save Face Image ───────────────────
-        import base64
-        from django.core.files.base import ContentFile
-        import uuid
-
         try:
             # Handle potential header in base64 string
-            if "base64," in face_image_b64:
-                face_image_b64 = face_image_b64.split("base64,")[1]
+            img_b64 = face_image_b64
+            if "base64," in img_b64:
+                img_b64 = img_b64.split("base64,")[1]
             
-            format, imgstr = face_image_b64.split(';base64,') if ';base64,' in face_image_b64 else (None, face_image_b64)
-            ext = 'jpg' # Default extension
-            
-            image_data = base64.b64decode(imgstr)
+            image_data = base64.b64decode(img_b64)
             filename = f"registration_{profile.id}_{uuid.uuid4().hex[:8]}.jpg"
             
-            # Save to FaceRegistrationImage
-            # Note: Since image_path is a CharField in the model, we save the relative path
-            # We'll assume a 'faces/' subdirectory in MEDIA_ROOT
+            # Ensure the directory exists
             face_dir = os.path.join(settings.MEDIA_ROOT, 'faces')
             if not os.path.exists(face_dir):
-                os.makedirs(face_dir)
+                os.makedirs(face_dir, exist_ok=True)
             
             file_path = os.path.join(face_dir, filename)
             with open(file_path, 'wb') as f:
@@ -112,10 +109,10 @@ class StudentRegistrationSerializer(serializers.Serializer):
             # Log error but don't fail registration
             print(f"Error saving face image: {e}")
             # Fallback placeholder
-            FaceRegistrationImage.objects.create(
+            FaceRegistrationImage.objects.get_or_create(
                 student=profile,
-                image_path=f"faces/placeholder.jpg",
-                angle='front'
+                angle='front',
+                defaults={'image_path': "faces/placeholder.jpg"}
             )
 
         return profile

@@ -91,8 +91,9 @@ class PendingUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'email', 'full_name', 'role', 'phone',
-            'college_name', 'is_approved', 'is_active', 'created_at',
+            'id', 'email', 'first_name', 'last_name', 'full_name', 
+            'role', 'phone', 'college_name', 'is_approved', 
+            'is_active', 'created_at',
         ]
 
     def get_full_name(self, obj):
