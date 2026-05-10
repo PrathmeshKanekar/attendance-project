@@ -1,12 +1,15 @@
 class AppConstants {
   AppConstants._();
 
-  // Current Machine IP: 10.123.167.98
-  // Use 10.0.2.2:8000 for Android Emulator
-  // Use 127.0.0.1:8000 for local Windows dev
+  // ── MOBILE CONNECTIVITY ──────────────────────────────────────────
+  // 1. Android Emulator: Use http://10.0.2.2:8000
+  // 2. Local Machine  : Use http://127.0.0.1:8000
+  // 3. Physical Device: Use http://YOUR_PC_IP:8000 (e.g. http://192.168.x.x:8000)
+  // ─────────────────────────────────────────────────────────────────
+  
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'http://10.223.81.98:8000', // PC LAN IP for physical device connection
   );
 
   static const String tokenKey   = 'access_token';

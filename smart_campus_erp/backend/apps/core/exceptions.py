@@ -26,15 +26,19 @@ def custom_exception_handler(exc, context):
         response.data = custom_data
     else:
         # Handle non-DRF exceptions (500 errors)
+        from django.db import OperationalError
+        
+        if isinstance(exc, OperationalError):
+            logger.error(f"Database Connectivity Error: {exc}")
+            return Response({
+                'success': False,
+                'error_code': 'DatabaseUnavailable',
+                'message': 'The database is temporarily unavailable. Please try again in a few moments.',
+                'details': {'exception_type': 'OperationalError'}
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         logger.error(f"Unhandled Exception: {exc}", exc_info=True)
         
-        # Sentry logging would go here if configured
-        try:
-            import sentry_sdk
-            sentry_sdk.capture_exception(exc)
-        except ImportError:
-            pass
-
         return Response({
             'success': False,
             'error_code': 'InternalServerError',

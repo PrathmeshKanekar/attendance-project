@@ -25,6 +25,7 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
   bool _facesDetected = false;
   bool _captureDone = false;
   CameraDescription? _frontCamera;
+  int _lastProcessTime = 0;
 
   @override
   void initState() {
@@ -67,38 +68,43 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
   }
 
   void _onCameraFrame(CameraImage image) async {
-    if (_isProcessing || _faceDetector == null || _frontCamera == null) return;
+    if (_isProcessing || _faceDetector == null || _frontCamera == null || _captureDone) return;
+    
+    // Throttle frames to avoid CPU overload (approx 10 FPS)
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastProcessTime < 100) return;
+    _lastProcessTime = now;
+
     _isProcessing = true;
     try {
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in image.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      final bytes = allBytes.done().buffer.asUint8List();
-
-      final inputImage = InputImage.fromBytes(
-        bytes: bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: InputImageRotationValue.fromRawValue(_frontCamera!.sensorOrientation) ?? InputImageRotation.rotation0deg,
-          format: InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21,
-          bytesPerRow: image.planes[0].bytesPerRow,
-        ),
-      );
+      final inputImage = _buildInputImage(image);
+      if (inputImage == null) return;
 
       final faces = await _faceDetector!.processImage(inputImage);
+      
       if (mounted) {
         setState(() => _facesDetected = faces.isNotEmpty);
       }
 
       if (faces.isNotEmpty) {
-        ref.read(faceScanNotifierProvider.notifier).processFaceDetection(faces.first);
+        // Alignment check: ensure face is relatively centered and large enough
+        final face = faces.first;
+        final rect = face.boundingBox;
+        
+        // Simple heuristic: face should take up at least 30% of the width
+        final faceWidthRatio = rect.width / image.width;
+        if (faceWidthRatio > 0.3) {
+          ref.read(faceScanNotifierProvider.notifier).processFaceDetection(face);
+        }
       }
 
       final scanState = ref.read(faceScanNotifierProvider);
       if (scanState is FaceScanCapturing && !_captureDone) {
         _captureDone = true;
+        // Small delay to ensure UI updates
+        await Future.delayed(const Duration(milliseconds: 300));
         await _controller!.stopImageStream();
+        
         final xfile = await _controller!.takePicture();
         final imgBytes = await xfile.readAsBytes();
         final b64 = base64Encode(imgBytes);
@@ -109,14 +115,59 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
           api: ref.read(apiClientProvider),
         );
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Face detection error: $e');
     } finally {
       _isProcessing = false;
     }
   }
 
+  InputImage? _buildInputImage(CameraImage image) {
+    try {
+      final WriteBuffer allBytes = WriteBuffer();
+      for (final Plane plane in image.planes) {
+        allBytes.putUint8List(plane.bytes);
+      }
+      final bytes = allBytes.done().buffer.asUint8List();
+
+      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      final camera = _frontCamera!;
+      final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation0deg;
+      
+      // On Android, the format is usually YUV_420_888 (raw 35)
+      // On iOS, it's usually BGRA_8888 (raw 1111970369)
+      final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.yuv420;
+
+      final planeData = image.planes.map(
+        (Plane plane) {
+          return InputImagePlaneMetadata(
+            bytesPerRow: plane.bytesPerRow,
+            height: plane.height,
+            width: plane.width,
+          );
+        },
+      ).toList();
+
+      final inputImageData = InputImageMetadata(
+        size: imageSize,
+        rotation: imageRotation,
+        format: inputImageFormat,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      );
+
+      return InputImage.fromBytes(
+        bytes: bytes,
+        metadata: inputImageData,
+      );
+    } catch (e) {
+      debugPrint('InputImage conversion error: $e');
+      return null;
+    }
+  }
+
   @override
   void dispose() {
+    _captureDone = true; // Prevent further processing
     _controller?.dispose();
     _faceDetector?.close();
     super.dispose();

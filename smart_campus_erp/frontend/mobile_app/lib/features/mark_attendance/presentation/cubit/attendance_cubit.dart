@@ -3,8 +3,9 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io' show Platform; // Conditional import for non-web platforms
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../domain/repositories/i_attendance_repository.dart';
-import 'attendance_state.dart';
+import 'package:smart_campus_app/core/services/location_service.dart';
+import 'package:smart_campus_app/features/mark_attendance/domain/repositories/i_attendance_repository.dart';
+import 'package:smart_campus_app/features/mark_attendance/presentation/cubit/attendance_state.dart';
 
 class AttendanceCubit extends Cubit<AttendanceState> {
   final IAttendanceRepository _repository;
@@ -85,10 +86,8 @@ class AttendanceCubit extends Cubit<AttendanceState> {
     if (isClosed) return;
     _updateStep(AttendanceStep.gpsValidation, StepStatus.processing);
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 15),
-      );
+      final locService = LocationService();
+      final pos = await locService.getCurrentPosition();
       
       if (isClosed) return;
 
@@ -139,9 +138,18 @@ class AttendanceCubit extends Cubit<AttendanceState> {
           }
         },
       );
+    } on LocationException catch (e) {
+      if (isClosed) return;
+      LocationErrorType type = LocationErrorType.other;
+      if (e.isServiceDisabled) type = LocationErrorType.serviceDisabled;
+      if (e.isPermissionDenied) type = LocationErrorType.permissionDenied;
+      if (e.isPermissionPermanentlyDenied) type = LocationErrorType.permissionPermanentlyDenied;
+      
+      emit(state.copyWith(locationErrorType: type));
+      _failStep(AttendanceStep.gpsValidation, e.message);
     } catch (e) {
       if (isClosed) return;
-      _failStep(AttendanceStep.gpsValidation, "Could not access GPS. Please enable location services.");
+      _failStep(AttendanceStep.gpsValidation, "GPS Error: ${e.toString()}");
     }
   }
 

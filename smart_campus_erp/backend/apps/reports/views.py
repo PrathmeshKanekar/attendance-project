@@ -99,7 +99,7 @@ def _get_attendance_data(
 # ══════════════════════════════════════════════════════════
 
 class AttendanceSummaryView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         alloc_id   = request.query_params.get('allocation_id')
@@ -174,7 +174,7 @@ class AttendanceSummaryView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class DefaultersView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         alloc_id  = request.query_params.get('allocation_id')
@@ -251,7 +251,7 @@ class DefaultersView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class DownloadPDFView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         alloc_id  = request.query_params.get('allocation_id')
@@ -329,7 +329,7 @@ class DownloadPDFView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class DownloadExcelView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         alloc_id  = request.query_params.get('allocation_id')
@@ -517,7 +517,7 @@ class TeacherSessionHistoryView(APIView):
 
 class CollegeOverviewView(APIView):
     permission_classes = [
-        IsPrincipal | IsHOD | IsCollegeAdmin | IsSuperAdmin
+        IsPrincipal | IsHOD | IsSuperAdmin
     ]
 
     def get(self, request):
@@ -590,7 +590,7 @@ class CollegeOverviewView(APIView):
 
 class DashboardSummaryView(APIView):
     """Simple summary stats for dashboard top cards."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsStudent | IsSuperAdmin]
 
     def get(self, request):
         college = request.user.college
@@ -638,7 +638,7 @@ class DashboardSummaryView(APIView):
 
 class AttendanceTrendsView(APIView):
     """Weekly/Monthly attendance trends for charts."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsStudent | IsSuperAdmin]
 
     def get(self, request):
         days = int(request.query_params.get('days', 30))

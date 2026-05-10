@@ -138,12 +138,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
     if (e.type == DioExceptionType.connectionTimeout ||
         e.type == DioExceptionType.receiveTimeout) {
-      return 'Connection timed out. Check your internet.';
+      return 'Connection timed out. Ensure your PC and phone are on the same Wi-Fi.';
     }
     if (e.type == DioExceptionType.connectionError) {
-      return 'Cannot connect to server. Check your network.';
+      return 'Connection Refused. Verify that your Django server is running on 0.0.0.0:8000 and your firewall allows connections.';
     }
-    return 'Something went wrong. Please try again.';
+    return 'Network Error: ${e.message ?? "Something went wrong"}. Please check your server IP in settings.';
   }
 }
 

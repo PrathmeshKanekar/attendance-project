@@ -8,7 +8,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../cubit/attendance_cubit.dart';
 import '../cubit/attendance_state.dart';
-import '../../../../core/constants/app_colors.dart';
+import 'package:smart_campus_app/core/constants/app_colors.dart';
 
 class CameraVerificationWidget extends StatefulWidget {
   const CameraVerificationWidget({super.key});

@@ -2,15 +2,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/constants/app_colors.dart';
-import '../../../../core/network/api_client.dart';
-import '../../domain/repositories/i_attendance_repository.dart';
-import '../../data/repositories/attendance_repository_impl.dart';
-import '../cubit/attendance_cubit.dart';
-import '../cubit/attendance_state.dart';
-import '../widgets/attendance_stepper.dart';
-import '../widgets/verification_step_widget.dart';
-import '../widgets/camera_verification_widget.dart';
+import 'package:smart_campus_app/core/constants/app_colors.dart';
+import 'package:smart_campus_app/core/network/api_client.dart';
+import 'package:smart_campus_app/core/services/location_service.dart';
+import 'package:smart_campus_app/features/mark_attendance/domain/repositories/i_attendance_repository.dart';
+import 'package:smart_campus_app/features/mark_attendance/data/repositories/attendance_repository_impl.dart';
+import 'package:smart_campus_app/features/mark_attendance/presentation/cubit/attendance_cubit.dart';
+import 'package:smart_campus_app/features/mark_attendance/presentation/cubit/attendance_state.dart';
+import 'package:smart_campus_app/features/mark_attendance/presentation/widgets/attendance_stepper.dart';
+import 'package:smart_campus_app/features/mark_attendance/presentation/widgets/verification_step_widget.dart';
+import 'package:smart_campus_app/features/mark_attendance/presentation/widgets/camera_verification_widget.dart';
 
 class MarkAttendancePage extends ConsumerWidget {
   final Map<String, dynamic> session;
@@ -139,7 +140,7 @@ class _MarkAttendanceView extends StatelessWidget {
           
           // Error Message Display
           if (state.errorMessage != null)
-            _buildErrorCard(state.errorMessage!),
+            _buildErrorCard(context, state),
             
           const SizedBox(height: 20),
         ],
@@ -208,7 +209,10 @@ class _MarkAttendanceView extends StatelessWidget {
     );
   }
 
-  Widget _buildErrorCard(String msg) {
+  Widget _buildErrorCard(BuildContext context, AttendanceState state) {
+    final msg = state.errorMessage!;
+    final type = state.locationErrorType;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -216,11 +220,42 @@ class _MarkAttendanceView extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.danger.withOpacity(0.3)),
       ),
-      child: Row(
+      child: Column(
         children: [
-          const Icon(Icons.error_outline_rounded, color: AppColors.danger),
-          const SizedBox(width: 12),
-          Expanded(child: Text(msg, style: const TextStyle(color: AppColors.danger, fontSize: 13))),
+          Row(
+            children: [
+              const Icon(Icons.error_outline_rounded, color: AppColors.danger),
+              const SizedBox(width: 12),
+              Expanded(child: Text(msg, style: const TextStyle(color: AppColors.danger, fontSize: 13))),
+            ],
+          ),
+          if (type != LocationErrorType.none) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: () {
+                    final loc = LocationService();
+                    if (type == LocationErrorType.serviceDisabled) {
+                      loc.openLocationSettings();
+                    } else {
+                      loc.openAppSettings();
+                    }
+                  },
+                  icon: Icon(
+                    type == LocationErrorType.serviceDisabled ? Icons.settings_rounded : Icons.app_settings_alt_rounded,
+                    size: 16,
+                    color: AppColors.danger,
+                  ),
+                  label: Text(
+                    type == LocationErrorType.serviceDisabled ? 'ENABLE GPS' : 'OPEN SETTINGS',
+                    style: const TextStyle(color: AppColors.danger, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

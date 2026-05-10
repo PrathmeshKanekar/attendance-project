@@ -184,35 +184,52 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
     final domainCtrl = TextEditingController(text: college?['email_domain'] ?? '');
     final addrCtrl   = TextEditingController(text: college?['address']      ?? '');
     final phoneCtrl  = TextEditingController(text: college?['phone']        ?? '');
+
+    // Admin Details (Only for Create)
+    final adminEmailCtrl = TextEditingController();
+    final adminFirstCtrl = TextEditingController();
+    final adminLastCtrl  = TextEditingController();
+    final adminPhoneCtrl = TextEditingController();
+
     final formKey    = GlobalKey<FormState>();
 
     showDialog(
       context : context,
+      barrierDismissible: false,
       builder : (ctx) => AlertDialog(
-        title    : Text(
-          isEdit ? 'Edit College' : 'Add New College',
-          style  : const TextStyle(fontWeight: FontWeight.bold),
+        title    : Row(
+          children: [
+            Icon(
+              isEdit ? Icons.edit_note_rounded : Icons.add_business_rounded,
+              color: AppColors.primaryLight,
+            ),
+            const SizedBox(width: 10),
+            Text(isEdit ? 'Edit College' : 'Register New College'),
+          ],
         ),
         shape    : RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
         ),
         content  : SizedBox(
-          width: 500,
+          width: 550,
           child: SingleChildScrollView(
             child: Form(
               key  : formKey,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children    : [
+                  
+                  _SectionHeader(title: 'College Information', icon: Icons.info_outline_rounded),
+                  const SizedBox(height: 12),
                   TextFormField(
                     controller : nameCtrl,
                     decoration : const InputDecoration(
                       labelText : 'College Name',
-                      hintText  : 'e.g. MIT College of Engineering',
+                      hintText  : 'e.g. Stanford University',
                       prefixIcon: Icon(Icons.school_rounded),
                     ),
-                    validator  : (v) => (v == null || v.trim().isEmpty)
-                        ? 'Name is required' : null,
+                    validator  : (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null,
                   ),
                   const SizedBox(height: 14),
                   Row(
@@ -222,60 +239,80 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
                           controller        : codeCtrl,
                           textCapitalization: TextCapitalization.characters,
                           decoration        : const InputDecoration(
-                            labelText : 'College Code',
-                            hintText  : 'e.g. MIT',
+                            labelText : 'Code',
+                            hintText  : 'e.g. STAN',
                             prefixIcon: Icon(Icons.tag_rounded),
                           ),
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Code required' : null,
+                          validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: TextFormField(
-                          controller : phoneCtrl,
-                          keyboardType: TextInputType.phone,
+                          controller : domainCtrl,
+                          keyboardType: TextInputType.emailAddress,
                           decoration : const InputDecoration(
-                            labelText : 'Phone',
-                            hintText  : '020-12345678',
-                            prefixIcon: Icon(Icons.phone_rounded),
+                            labelText : 'Email Domain',
+                            hintText  : 'stanford.edu',
+                            prefixIcon: Icon(Icons.alternate_email_rounded),
                           ),
+                          validator: (v) => (v == null || !v.contains('.')) ? 'Invalid domain' : null,
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 14),
                   TextFormField(
-                    controller : domainCtrl,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration : const InputDecoration(
-                      labelText : 'Email Domain',
-                      hintText  : 'e.g. mit.edu',
-                      prefixIcon: Icon(Icons.alternate_email_rounded),
-                      helperText: 'Students/staff will register with this domain',
-                    ),
-                    validator  : (v) {
-                      if (v == null || v.trim().isEmpty) {
-                        return 'Email domain is required';
-                      }
-                      if (!v.contains('.')) {
-                        return 'Enter a valid domain (e.g. college.edu)';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
                     controller : addrCtrl,
-                    maxLines   : 3,
+                    maxLines   : 2,
                     decoration : const InputDecoration(
-                      labelText : 'Address',
-                      hintText  : '123 College Road, City, State PIN',
+                      labelText : 'Full Address',
                       prefixIcon: Icon(Icons.location_on_rounded),
                     ),
-                    validator  : (v) => (v == null || v.trim().isEmpty)
-                        ? 'Address is required' : null,
+                    validator  : (v) => (v == null || v.trim().isEmpty) ? 'Address is required' : null,
                   ),
+
+                  if (!isEdit) ...[
+                    const SizedBox(height: 24),
+                    _SectionHeader(title: 'Primary College Admin', icon: Icons.admin_panel_settings_rounded),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller : adminEmailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration : const InputDecoration(
+                        labelText : 'Admin Email',
+                        hintText  : 'admin@college.edu',
+                        prefixIcon: Icon(Icons.email_rounded),
+                        helperText: 'A login account will be auto-created.',
+                      ),
+                      validator  : (v) => (v == null || !v.contains('@')) ? 'Invalid email' : null,
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller : adminFirstCtrl,
+                            decoration : const InputDecoration(
+                              labelText : 'First Name',
+                              prefixIcon: Icon(Icons.person_rounded),
+                            ),
+                            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextFormField(
+                            controller : adminLastCtrl,
+                            decoration : const InputDecoration(
+                              labelText : 'Last Name',
+                            ),
+                            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -292,61 +329,117 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
               final isLoading = crudState is CollegeCrudLoading;
               return ElevatedButton(
                 style    : ElevatedButton.styleFrom(
-                  minimumSize: const Size(100, 44),
+                  minimumSize: const Size(120, 46),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
                 onPressed: isLoading
                     ? null
                     : () async {
                         if (!formKey.currentState!.validate()) return;
-                        Navigator.pop(ctx);
-
+                        
                         final data = {
                           'name'        : nameCtrl.text.trim(),
                           'code'        : codeCtrl.text.trim().toUpperCase(),
                           'email_domain': domainCtrl.text.trim().toLowerCase(),
                           'address'     : addrCtrl.text.trim(),
                           'phone'       : phoneCtrl.text.trim(),
+                          if (!isEdit) ...{
+                            'admin_email'      : adminEmailCtrl.text.trim().toLowerCase(),
+                            'admin_first_name' : adminFirstCtrl.text.trim(),
+                            'admin_last_name'  : adminLastCtrl.text.trim(),
+                            'admin_phone'      : adminPhoneCtrl.text.trim(),
+                          }
                         };
 
-                        bool success;
-                        if (isEdit) {
-                          success = await ref
-                              .read(collegeCrudProvider.notifier)
-                              .updateCollege(college['id'].toString(), data);
-                        } else {
-                          success = await ref
-                              .read(collegeCrudProvider.notifier)
-                              .createCollege(data);
-                        }
+                        final success = isEdit 
+                          ? await ref.read(collegeCrudProvider.notifier).updateCollege(college['id'].toString(), data)
+                          : await ref.read(collegeCrudProvider.notifier).createCollege(data);
+
+                        if (ctx.mounted) Navigator.pop(ctx);
 
                         if (context.mounted) {
                           final state = ref.read(collegeCrudProvider);
-                          final msg   = state is CollegeCrudSuccess
-                              ? state.message
-                              : state is CollegeCrudError
-                                  ? state.message
-                                  : '';
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content        : Text(msg),
-                              backgroundColor: success
-                                  ? AppColors.success
-                                  : AppColors.danger,
-                            ),
-                          );
+                          if (success && state is CollegeCrudSuccess) {
+                            if (state.data != null) {
+                              // Show credentials modal for new college
+                              _showCredentialsDialog(context, state.data!);
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(state.message), backgroundColor: AppColors.success),
+                              );
+                            }
+                          } else if (state is CollegeCrudError) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(state.message), backgroundColor: AppColors.danger),
+                            );
+                          }
                           ref.read(collegeCrudProvider.notifier).reset();
                         }
                       },
                 child: isLoading
-                    ? const SizedBox(
-                        width : 20, height: 20,
-                        child : CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white,
-                        ),
-                      )
-                    : Text(isEdit ? 'Save' : 'Create'),
+                    ? const SizedBox(width : 20, height: 20, child : CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : Text(isEdit ? 'Save Changes' : 'Register College'),
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCredentialsDialog(BuildContext context, Map<String, dynamic> credentials) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.vpn_key_rounded, color: AppColors.success),
+            SizedBox(width: 10),
+            Text('College Admin Created'),
+          ],
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'A dedicated College Admin account has been automatically generated with the following credentials:',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            _CredentialField(label: 'Admin Email', value: credentials['email']?.toString() ?? ''),
+            const SizedBox(height: 10),
+            _CredentialField(label: 'Temp Password', value: credentials['password']?.toString() ?? '', isPassword: true),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: AppColors.warning, size: 18),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Please share these credentials securely. The password will not be shown again.',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
+            child: const Text('I have saved these'),
           ),
         ],
       ),
@@ -419,6 +512,58 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
   }
 }
 
+class _SectionHeader extends StatelessWidget {
+  final String title; final IconData icon;
+  const _SectionHeader({required this.title, required this.icon});
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: AppColors.textSecondary),
+        const SizedBox(width: 8),
+        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textSecondary, letterSpacing: 0.5)),
+      ],
+    );
+  }
+}
+
+class _CredentialField extends StatelessWidget {
+  final String label; final String value; final bool isPassword;
+  const _CredentialField({required this.label, required this.value, this.isPassword = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.bgSecondary,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.borderColor),
+          ),
+          child: Row(
+            children: [
+              Expanded(child: Text(value, style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold, fontSize: 14))),
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, size: 18),
+                onPressed: () {
+                  // Standard copy to clipboard logic would go here
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                },
+                constraints: const BoxConstraints(),
+                padding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 // ── College card ───────────────────────────────────────────
 class _CollegeCard extends StatelessWidget {

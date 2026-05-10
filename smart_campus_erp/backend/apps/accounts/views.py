@@ -76,7 +76,7 @@ class EmailLoginView(APIView):
                 {
                     'error': (
                         'Your account is pending approval. '
-                        'Please contact your college admin or principal.'
+                        'Please contact your college Principal.'
                     )
                 },
                 status=status.HTTP_403_FORBIDDEN,
@@ -256,6 +256,15 @@ class CreateUserView(APIView):
             else None
         )
 
+        # Requirements: Principal and College Admin become active immediately.
+        # Others (teacher, staff, lab) stay inactive/pending.
+        is_active = False
+        is_approved = False
+
+        if role in ['principal', 'college_admin', 'super_admin']:
+            is_active = True
+            is_approved = True
+
         ROLES_NEEDING_PRINCIPAL = [
             'teacher', 'hod', 'lab_assistant',
         ]
@@ -290,8 +299,8 @@ class CreateUserView(APIView):
             phone      = data.get('phone', ''),
             role       = role,
             college    = college,
-            is_active  = False,
-            is_approved = False,
+            is_active  = is_active,
+            is_approved = is_approved,
         )
 
         if role == 'student':
@@ -333,7 +342,8 @@ class CreateUserView(APIView):
                 year_of_study = year_of_study,
             )
 
-        if college:
+        # Create approval request only for roles that need it (not Principal)
+        if college and role != 'principal':
             ApprovalRequest.objects.create(
                 college        = college,
                 user           = user,
@@ -341,13 +351,14 @@ class CreateUserView(APIView):
                 status         = 'pending',
             )
 
-            principal_qs = User.objects.filter(
+            # Notifications for Principal (only role who can approve now)
+            principals_qs = User.objects.filter(
                 college=college,
                 role='principal',
                 is_active=True,
                 is_approved=True,
             )
-            for principal in principal_qs:
+            for principal in principals_qs:
                 Notification.objects.create(
                     college    = college,
                     recipient  = principal,
@@ -360,13 +371,16 @@ class CreateUserView(APIView):
                     notif_type = 'approval',
                 )
 
+        msg = 'User created successfully.'
+        if not is_approved:
+            msg += ' Awaiting approval from college Principal.'
+        else:
+            msg += ' Account is active and ready to login.'
+
         return Response(
             {
                 'success': True,
-                'message': (
-                    'User created successfully. '
-                    'Awaiting approval from principal.'
-                ),
+                'message': msg,
                 'user_id': str(user.id),
             },
             status=status.HTTP_201_CREATED,
@@ -416,24 +430,20 @@ class ListUsersView(APIView):
 # POST /api/users/<id>/approve/
 # ─────────────────────────────────────────────
 class ApproveUserView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    # ONLY Principal can approve
+    permission_classes = [IsPrincipal]
 
     def post(self, request, user_id):
         try:
-            target = User.objects.select_related('college').get(id=user_id)
+            # Filter by college to ensure security
+            target = User.objects.select_related('college').get(
+                id      = user_id,
+                college = request.user.college
+            )
         except User.DoesNotExist:
             return Response(
-                {'error': 'User not found.'},
+                {'error': 'User not found in your college.'},
                 status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if (
-            request.user.role != 'super_admin'
-            and target.college != request.user.college
-        ):
-            return Response(
-                {'error': 'You can only approve users in your own college.'},
-                status=status.HTTP_403_FORBIDDEN,
             )
 
         target.is_approved = True
@@ -478,7 +488,8 @@ class ApproveUserView(APIView):
 # POST /api/users/<id>/reject/
 # ─────────────────────────────────────────────
 class RejectUserView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    # ONLY Principal can reject
+    permission_classes = [IsPrincipal]
 
     def post(self, request, user_id):
         reason = request.data.get('reason', '').strip()
@@ -489,20 +500,15 @@ class RejectUserView(APIView):
             )
 
         try:
-            target = User.objects.select_related('college').get(id=user_id)
+            # Filter by college to ensure security
+            target = User.objects.get(
+                id      = user_id,
+                college = request.user.college
+            )
         except User.DoesNotExist:
             return Response(
-                {'error': 'User not found.'},
+                {'error': 'User not found in your college.'},
                 status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if (
-            request.user.role != 'super_admin'
-            and target.college != request.user.college
-        ):
-            return Response(
-                {'error': 'You can only reject users in your own college.'},
-                status=status.HTTP_403_FORBIDDEN,
             )
 
         target.is_approved = False
@@ -606,6 +612,13 @@ class UserDetailView(APIView):
         if not target:
             return Response({'error': 'User not found.'}, status=404)
 
+        # Protection for Super Admin account
+        if target.email == 'superadmin@app.com':
+            return Response(
+                {'error': 'The permanent Super Admin account cannot be modified.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         allowed_fields = ['first_name', 'last_name', 'phone', 'profile_photo']
         for field in allowed_fields:
             if field in request.data:
@@ -635,6 +648,13 @@ class DeactivateUserView(APIView):
         if (request.user.role != 'super_admin'
                 and target.college != request.user.college):
             return Response({'error': 'Forbidden.'}, status=403)
+
+        # Protection for Super Admin account
+        if target.email == 'superadmin@app.com':
+            return Response(
+                {'error': 'The permanent Super Admin account cannot be deactivated.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if target == request.user:
             return Response(
@@ -670,16 +690,22 @@ class DeactivateUserView(APIView):
 class PendingApprovalsView(APIView):
     """
     Returns all pending users for the approver's college.
-    Used by Principal, College Admin, and Lab Assistant.
+    ONLY Principal can access.
     """
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsPrincipal]
 
     def get(self, request):
+        # ONLY: teacher, lab assistant, hod should require approval.
+        # Students are managed separately, Principal is auto-approved.
+        ROLES_NEEDING_APPROVAL = ['teacher', 'lab_assistant', 'hod', 'staff', 'other_staff']
+        
         qs = User.objects.select_related('college').filter(
             is_approved = False,
+            role__in    = ROLES_NEEDING_APPROVAL
         )
-        if request.user.role != 'super_admin':
-            qs = qs.filter(college=request.user.college)
+        
+        # Always filter by college since only college_admin can access
+        qs = qs.filter(college=request.user.college)
 
         role = request.query_params.get('role')
         if role:

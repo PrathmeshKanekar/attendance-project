@@ -1,9 +1,9 @@
 
 import 'package:dartz/dartz.dart';
-import '../../../../core/network/api_client.dart';
-import '../../domain/repositories/i_attendance_repository.dart';
+import 'package:smart_campus_app/core/network/api_client.dart';
+import 'package:smart_campus_app/features/mark_attendance/domain/repositories/i_attendance_repository.dart';
 import 'package:dio/dio.dart';
-import '../../../../core/offline/offline_attendance_service.dart';
+import 'package:smart_campus_app/core/offline/offline_attendance_service.dart';
 
 class AttendanceRepositoryImpl implements IAttendanceRepository {
   final ApiClient _api;

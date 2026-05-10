@@ -48,6 +48,12 @@ class CollegeListCreateView(APIView):
         })
 
     def post(self, request):
+        from django.db import transaction
+        from apps.accounts.models import User, UserRole
+        import secrets
+        import string
+
+        # College Details
         name         = request.data.get('name', '').strip()
         code         = request.data.get('code', '').strip().upper()
         email_domain = request.data.get('email_domain', '').strip().lower()
@@ -55,70 +61,83 @@ class CollegeListCreateView(APIView):
         phone        = request.data.get('phone', '').strip()
         logo_url     = request.data.get('logo_url', '').strip()
 
-        if not name:
+        # Admin Details
+        admin_email = request.data.get('admin_email', '').strip().lower()
+        admin_first = request.data.get('admin_first_name', '').strip()
+        admin_last  = request.data.get('admin_last_name', '').strip()
+        admin_phone = request.data.get('admin_phone', '').strip()
+
+        # Validations
+        if not all([name, code, email_domain, address, admin_email, admin_first]):
             return Response(
-                {'error': 'College name is required.'},
+                {'error': 'College details and basic Admin info (email, name) are required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not code:
+
+        if User.objects.filter(email=admin_email).exists():
             return Response(
-                {'error': 'College code is required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not email_domain:
-            return Response(
-                {'error': 'Email domain is required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not address:
-            return Response(
-                {'error': 'Address is required.'},
+                {'error': f'A user with email "{admin_email}" already exists.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
-            college = College.objects.create(
-                name         = name,
-                code         = code,
-                email_domain = email_domain,
-                address      = address,
-                phone        = phone,
-                logo_url     = logo_url,
-                is_active    = True,
-            )
+            with transaction.atomic():
+                # 1. Create College
+                college = College.objects.create(
+                    name         = name,
+                    code         = code,
+                    email_domain = email_domain,
+                    address      = address,
+                    phone        = phone,
+                    logo_url     = logo_url,
+                    is_active    = True,
+                )
+
+                # 2. Generate Secure Password
+                alphabet = string.ascii_letters + string.digits
+                temp_password = ''.join(secrets.choice(alphabet) for i in range(10))
+
+                # 3. Create College Admin User
+                admin_user = User.objects.create(
+                    email      = admin_email,
+                    first_name = admin_first,
+                    last_name  = admin_last,
+                    phone      = admin_phone,
+                    role       = UserRole.COLLEGE_ADMIN,
+                    college    = college,
+                    is_active  = True,
+                    is_approved= True,
+                )
+                admin_user.set_password(temp_password)
+                admin_user.save()
+
             return Response(
                 {
                     'success': True,
-                    'message': f'College "{college.name}" created successfully.',
+                    'message': f'College "{college.name}" and Admin account created successfully.',
                     'college': {
-                        'id'          : str(college.id),
-                        'name'        : college.name,
-                        'code'        : college.code,
-                        'email_domain': college.email_domain,
-                        'address'     : college.address,
-                        'phone'       : college.phone,
-                        'is_active'   : college.is_active,
-                        'created_at'  : college.created_at.isoformat(),
-                        'user_count'  : 0,
+                        'id'   : str(college.id),
+                        'name' : college.name,
+                        'code' : college.code,
                     },
+                    'admin_credentials': {
+                        'email'    : admin_email,
+                        'password' : temp_password,
+                        'note'     : 'Please share these credentials securely with the College Admin.'
+                    }
                 },
                 status=status.HTTP_201_CREATED,
             )
+
         except IntegrityError as e:
-            if 'code' in str(e):
-                return Response(
-                    {'error': f'College code "{code}" already exists.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if 'email_domain' in str(e):
-                return Response(
-                    {'error': f'Email domain "{email_domain}" already exists.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            return Response(
-                {'error': 'A college with this code or domain already exists.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            error_msg = str(e)
+            if 'code' in error_msg:
+                return Response({'error': f'College code "{code}" already exists.'}, status=400)
+            if 'email_domain' in error_msg:
+                return Response({'error': f'Email domain "{email_domain}" already exists.'}, status=400)
+            return Response({'error': 'A database integrity error occurred.'}, status=400)
+        except Exception as e:
+            return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=500)
 
 
 class CollegeDetailView(APIView):

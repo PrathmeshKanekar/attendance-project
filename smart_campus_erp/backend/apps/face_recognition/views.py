@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 class FaceRegisterView(APIView):
     """
     Register a student's face by generating an embedding from a photo.
-    Only Lab Assistants and College Admins can call this.
+    Requirement: Only students can have face data.
+    Only allows registration if face is not already registered.
     """
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         ser = FaceRegisterInputSerializer(data=request.data)
@@ -40,18 +41,38 @@ class FaceRegisterView(APIView):
         try:
             profile = StudentProfile.objects.select_related(
                 'user', 'college'
-            ).get(id=student_id, is_active=True)
+            ).get(id=student_id)
         except StudentProfile.DoesNotExist:
             return Response(
                 {'error': 'Student not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # ── College scope check ────────────────────────────
-        if (request.user.role != 'super_admin'
-                and profile.college != request.user.college):
+        # ── Security Rules ─────────────────────────────────
+        # 1. Only students can register face data.
+        if profile.user.role != 'student':
             return Response(
-                {'error': 'You can only register faces for students in your college.'},
+                {'error': 'Face registration is only permitted for student roles.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # 2. Prevent re-registration if already locked (face_registered = True)
+        if profile.face_registered:
+            return Response(
+                {'error': 'Face biometric is already registered and locked for this profile.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 3. Authorization check
+        # Student can register their own face.
+        # Lab Assistant / Admin can register during onboarding.
+        can_register = (
+            request.user == profile.user or
+            request.user.role in ['lab_assistant', 'college_admin', 'super_admin']
+        )
+        if not can_register:
+            return Response(
+                {'error': 'You do not have permission to register face data for this student.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -70,29 +91,25 @@ class FaceRegisterView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # ── Save or update descriptor ──────────────────────
-        descriptor, created = FaceDescriptor.objects.update_or_create(
-            student=profile,
-            defaults={
-                'embedding'    : embedding,
-                'model_used'   : 'DeepFace-Facenet',
-                'registered_by': request.user,
-            },
+        # ── Save descriptor (Use UpdateOrCreate but we already checked existence) ──
+        descriptor = FaceDescriptor.objects.create(
+            student       = profile,
+            embedding     = embedding,
+            model_used    = 'DeepFace-Facenet',
+            registered_by = request.user,
         )
 
         # ── Update student face_registered flag ────────────
-        StudentProfile.objects.filter(id=student_id).update(
-            face_registered=True
-        )
+        profile.face_registered = True
+        profile.save(update_fields=['face_registered'])
 
-        action = 'registered' if created else 're-registered'
         return Response(
             {
                 'success'   : True,
-                'message'   : f'Face {action} successfully for {profile.user.get_full_name()}.',
+                'message'   : f'Face registered and locked successfully for {profile.user.get_full_name()}.',
                 'descriptor': FaceDescriptorSerializer(descriptor).data,
             },
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            status=status.HTTP_201_CREATED,
         )
 
 

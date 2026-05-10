@@ -1,7 +1,7 @@
 
 import 'package:flutter/material.dart';
 import '../cubit/attendance_state.dart';
-import '../../../../core/constants/app_colors.dart';
+import 'package:smart_campus_app/core/constants/app_colors.dart';
 
 class VerificationStepWidget extends StatelessWidget {
   final String title;

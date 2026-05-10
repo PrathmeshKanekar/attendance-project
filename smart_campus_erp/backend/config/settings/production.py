@@ -18,8 +18,15 @@ DATABASES = {
         'PORT'    : config('DB_PORT', default='5432'),
         'OPTIONS' : {
             'connect_timeout': 10,
+            'sslmode': 'require',
+            # TCP Keepalives to prevent cloud database timeouts
+            'keepalives': 1,
+            'keepalives_idle': 60,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
         },
-        'CONN_MAX_AGE': 60,
+        'CONN_MAX_AGE': 600,
+        'CONN_HEALTH_CHECKS': True,
     }
 }
 

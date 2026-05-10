@@ -49,6 +49,13 @@ class IsStudent(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         return IsSameCollege().has_object_permission(request, view, obj)
 
+class IsLabAssistant(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role == 'lab_assistant'
+    
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
+
 class IsCollegeActiveAndSubscribed(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user.is_authenticated or not request.user.college:

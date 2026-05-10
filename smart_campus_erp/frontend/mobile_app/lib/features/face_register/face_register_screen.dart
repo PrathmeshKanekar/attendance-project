@@ -169,7 +169,20 @@ class _FaceRegisterScreenState extends ConsumerState<FaceRegisterScreen> {
                 const SizedBox(height: 16),
 
                 // Actions Button
-                if (_capturedImage == null)
+                if (widget.student.faceRegistered)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        'Face profile is already registered and locked.',
+                        style: TextStyle(
+                          color: Colors.red,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  )
+                else if (_capturedImage == null)
                   SizedBox(
                     width: double.infinity,
                     height: 52,

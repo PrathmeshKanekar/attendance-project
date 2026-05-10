@@ -5,7 +5,7 @@ from rest_framework.response    import Response
 from rest_framework.views       import APIView
 
 from apps.accounts.permissions  import (
-    IsCollegeScopedStaff, IsSuperAdmin, IsTeacher,
+    IsCollegeScopedStaff, IsSuperAdmin, IsTeacher, IsLabAssistant,
 )
 from apps.attendance.models     import AttendanceSession
 from .geo_utils                 import check_inside_room, haversine_distance
@@ -55,18 +55,10 @@ class VirtualRoomListCreateView(APIView):
         return Response(VirtualRoomSerializer(qs, many=True).data)
 
     def post(self, request):
-        permission = IsCollegeScopedStaff | IsSuperAdmin
-        # Manual permission check
-        if not (
-            request.user.is_authenticated and (
-                request.user.role in [
-                    'college_admin', 'principal', 'hod',
-                    'lab_assistant', 'super_admin', 'teacher',
-                ]
-            )
-        ):
+        # Requirement: ONLY Lab Assistant can create Virtual Rooms.
+        if request.user.role != 'lab_assistant':
             return Response(
-                {'error': 'Permission denied.'},
+                {'error': 'Forbidden. Only lab assistants can manage virtual rooms.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -74,12 +66,7 @@ class VirtualRoomListCreateView(APIView):
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        college = (
-            request.user.college
-            if request.user.role != 'super_admin'
-            else None
-        )
-
+        college = request.user.college
         room = ser.save(
             college    = college,
             created_by = request.user,
@@ -125,11 +112,11 @@ class VirtualRoomDetailView(APIView):
         if not room:
             return Response({'error': 'Room not found.'}, status=404)
 
-        if request.user.role not in [
-            'college_admin', 'principal', 'hod',
-            'lab_assistant', 'super_admin', 'teacher',
-        ]:
-            return Response({'error': 'Permission denied.'}, status=403)
+        if request.user.role != 'lab_assistant':
+            return Response(
+                {'error': 'Only lab assistants have permission to edit virtual rooms.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         ser = VirtualRoomSerializer(room, data=request.data, partial=True)
         if ser.is_valid():
@@ -142,10 +129,11 @@ class VirtualRoomDetailView(APIView):
         if not room:
             return Response({'error': 'Room not found.'}, status=404)
 
-        if request.user.role not in [
-            'college_admin', 'principal', 'lab_assistant', 'super_admin',
-        ]:
-            return Response({'error': 'Permission denied.'}, status=403)
+        if request.user.role != 'lab_assistant':
+            return Response(
+                {'error': 'Only lab assistants have permission to delete virtual rooms.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Prevent deletion if room has active sessions
         active_sessions = AttendanceSession.objects.filter(

@@ -16,6 +16,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _fadeCtrl;
   late Animation<double>   _fadeAnim;
+  bool _timerDone = false;
+  bool _navigated = false;
 
   @override
   void initState() {
@@ -29,10 +31,12 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     );
     _fadeCtrl.forward();
 
-    // CRITICAL FIX: auth restore runs in AuthNotifier constructor
-    // We just need to listen for result here
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _listenAndNavigate();
+    // Minimum display time for branding
+    Future.delayed(const Duration(milliseconds: 2000), () {
+      if (mounted) {
+        setState(() => _timerDone = true);
+        _checkAndNavigate(ref.read(authProvider));
+      }
     });
   }
 
@@ -42,33 +46,15 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     super.dispose();
   }
 
-  Future<void> _listenAndNavigate() async {
-    // Wait minimum 1.5s for branding visibility
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
+  void _checkAndNavigate(AuthState state) {
+    if (!_timerDone || _navigated) return;
 
-    final authState = ref.read(authProvider);
-
-    if (authState is AuthSuccess) {
-      _navigate(authState.user);
-      return;
-    }
-
-    if (authState is AuthUnauthenticated || authState is AuthError) {
-      if (mounted) context.go('/login');
-      return;
-    }
-
-    // Still loading — wait for it to complete
-    if (authState is AuthInitial || authState is AuthLoading) {
-      ref.listen<AuthState>(authProvider, (_, next) {
-        if (!mounted) return;
-        if (next is AuthSuccess) {
-          _navigate(next.user);
-        } else if (next is AuthUnauthenticated || next is AuthError) {
-          context.go('/login');
-        }
-      });
+    if (state is AuthSuccess) {
+      _navigated = true;
+      _navigate(state.user);
+    } else if (state is AuthUnauthenticated || state is AuthError) {
+      _navigated = true;
+      context.go('/login');
     }
   }
 
@@ -88,6 +74,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    // CRITICAL FIX: ref.listen must be in build()
+    ref.listen<AuthState>(authProvider, (prev, next) {
+      _checkAndNavigate(next);
+    });
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(

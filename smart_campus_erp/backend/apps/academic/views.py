@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.permissions import (
-    IsCollegeScopedStaff, IsSuperAdmin, IsTeacher,
+    IsCollegeScopedStaff, IsSuperAdmin, IsTeacher, IsLabAssistant,
 )
 from .models import (
     Department, Course, AcademicYear,
@@ -33,7 +33,7 @@ def college_scope(user, qs, field='college'):
 # ══════════════════════════════════════════════════════════
 
 class DepartmentListCreateView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         qs = college_scope(
@@ -77,7 +77,7 @@ class DepartmentListCreateView(APIView):
 
 
 class DepartmentDetailView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
 
     def _get_dept(self, request, pk):
         try:
@@ -122,7 +122,7 @@ class DepartmentDetailView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class CourseListCreateView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         qs = college_scope(
@@ -135,11 +135,23 @@ class CourseListCreateView(APIView):
         return Response(CourseSerializer(qs.order_by('name'), many=True).data)
 
     def post(self, request):
+        college = (request.user.college
+                   if request.user.role != 'super_admin'
+                   else None)
+        
+        # Ensure the department belongs to the same college
+        dept_id = request.data.get('department')
+        if dept_id and college:
+            try:
+                Department.objects.get(id=dept_id, college=college)
+            except Department.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid department for your college.'},
+                    status=400
+                )
+
         ser = CourseSerializer(data=request.data)
         if ser.is_valid():
-            college = (request.user.college
-                       if request.user.role != 'super_admin'
-                       else None)
             try:
                 course = ser.save(college=college)
                 return Response(
@@ -148,14 +160,14 @@ class CourseListCreateView(APIView):
                 )
             except IntegrityError:
                 return Response(
-                    {'error': 'A course with this code already exists.'},
+                    {'error': 'A course with this code already exists in this college.'},
                     status=400,
                 )
         return Response(ser.errors, status=400)
 
 
 class CourseDetailView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
 
     def _get(self, request, pk):
         try:
@@ -166,10 +178,25 @@ class CourseDetailView(APIView):
             return None
         return c
 
+    def get(self, request, pk):
+        c = self._get(request, pk)
+        if not c:
+            return Response({'error': 'Not found'}, status=404)
+        return Response(CourseSerializer(c).data)
+
     def put(self, request, pk):
         c = self._get(request, pk)
         if not c:
             return Response({'error': 'Not found'}, status=404)
+        
+        # Verify department if updated
+        dept_id = request.data.get('department')
+        if dept_id and c.college:
+            try:
+                Department.objects.get(id=dept_id, college=c.college)
+            except Department.DoesNotExist:
+                return Response({'error': 'Invalid department.'}, status=400)
+
         ser = CourseSerializer(c, data=request.data, partial=True)
         if ser.is_valid():
             ser.save()
@@ -186,11 +213,11 @@ class CourseDetailView(APIView):
 
 
 # ══════════════════════════════════════════════════════════
-# ACADEMIC YEARS
+# ACADEMIC YEARS (Managed ONLY by Lab Assistant)
 # ══════════════════════════════════════════════════════════
 
 class AcademicYearListCreateView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsLabAssistant]
 
     def get(self, request):
         qs = college_scope(
@@ -202,32 +229,67 @@ class AcademicYearListCreateView(APIView):
     def post(self, request):
         ser = AcademicYearSerializer(data=request.data)
         if ser.is_valid():
-            college = (request.user.college
-                       if request.user.role != 'super_admin'
-                       else None)
-            year = ser.save(college=college)
-            return Response(
-                AcademicYearSerializer(year).data,
-                status=status.HTTP_201_CREATED,
-            )
+            college = request.user.college
+            # Validate overlapping active years if setting as current
+            if ser.validated_data.get('is_current', False):
+                AcademicYear.objects.filter(college=college, is_current=True).update(is_current=False)
+            
+            try:
+                year = ser.save(college=college)
+                return Response(
+                    AcademicYearSerializer(year).data,
+                    status=status.HTTP_201_CREATED,
+                )
+            except IntegrityError:
+                return Response({'error': 'An academic year with this name already exists.'}, status=400)
         return Response(ser.errors, status=400)
 
+class AcademicYearDetailView(APIView):
+    permission_classes = [IsLabAssistant]
+
+    def _get(self, request, pk):
+        try:
+            return AcademicYear.objects.get(pk=pk, college=request.user.college)
+        except AcademicYear.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        year = self._get(request, pk)
+        if not year: return Response({'error': 'Not found'}, status=404)
+        return Response(AcademicYearSerializer(year).data)
+
+    def put(self, request, pk):
+        year = self._get(request, pk)
+        if not year: return Response({'error': 'Not found'}, status=404)
+        ser = AcademicYearSerializer(year, data=request.data, partial=True)
+        if ser.is_valid():
+            ser.save()
+            return Response(ser.data)
+        return Response(ser.errors, status=400)
+
+    def delete(self, request, pk):
+        year = self._get(request, pk)
+        if not year: return Response({'error': 'Not found'}, status=404)
+        # Check if used in divisions
+        if year.divisions.exists():
+            return Response({'error': 'Cannot delete academic year in use by divisions.'}, status=400)
+        year.delete()
+        return Response({'success': True})
 
 class SetCurrentAcademicYearView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsLabAssistant]
 
     def post(self, request, pk):
         try:
-            year = AcademicYear.objects.get(pk=pk)
+            year = AcademicYear.objects.get(pk=pk, college=request.user.college)
         except AcademicYear.DoesNotExist:
             return Response({'error': 'Not found'}, status=404)
-        if (request.user.role != 'super_admin'
-                and year.college != request.user.college):
-            return Response({'error': 'Forbidden'}, status=403)
+        
         # Unset all others for this college
         AcademicYear.objects.filter(
             college=year.college, is_current=True
         ).update(is_current=False)
+        
         year.is_current = True
         year.save(update_fields=['is_current'])
         return Response({'success': True, 'message': f'{year.name} set as current.'})

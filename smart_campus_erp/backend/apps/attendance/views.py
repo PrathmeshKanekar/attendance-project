@@ -42,30 +42,47 @@ def _generate_session_code() -> str:
         if not AttendanceSession.objects.filter(session_code=code).exists():
             return code
 
+from django.core.cache import cache
+
 def auto_close_expired_sessions():
     """
-    Production Requirement: Attendance session should automatically close 
-    after 10 minutes. This helper marks active sessions as ended if 
-    the 10-minute window has passed.
+    Production Optimized: Closes sessions expired > 10 mins ago.
+    Uses execution cooldown and optimized queries to prevent API timeouts.
     """
+    # Execution cooldown (run max once per 30 seconds)
+    lock_key = "attendance_auto_close_lock"
+    if cache.get(lock_key):
+        return
+    cache.set(lock_key, True, 30)
+
+    now = timezone.now()
+    threshold = now - timezone.timedelta(minutes=10)
+    
     expired_sessions = AttendanceSession.objects.filter(
         status='active',
-        actual_start__lte=timezone.now() - timezone.timedelta(minutes=10)
-    )
+        actual_start__lte=threshold
+    ).select_related('subject_allocation', 'college')
     
+    if not expired_sessions.exists():
+        return
+
     for session in expired_sessions:
+        # Use a transaction-safe update
         session.status = 'ended'
         session.actual_end = session.actual_start + timezone.timedelta(minutes=10)
-        session.save()
+        session.save(update_fields=['status', 'actual_end'])
         
-        # Mark remaining enrolled students as absent
-        enrolled_ids = StudentSubjectEnrollment.objects.filter(
+        # Mark remaining enrolled students as absent (Optimized lookup)
+        enrolled_user_ids = StudentSubjectEnrollment.objects.filter(
             subject_allocation=session.subject_allocation,
             is_active=True
         ).values_list('student__user_id', flat=True)
         
-        marked_ids = AttendanceLog.objects.filter(session=session).values_list('student_id', flat=True)
-        absent_ids = set(enrolled_ids) - set(marked_ids)
+        marked_user_ids = AttendanceLog.objects.filter(
+            session=session
+        ).values_list('student_id', flat=True)
+        
+        absent_ids = set(enrolled_user_ids) - set(marked_user_ids)
         
         if absent_ids:
             AttendanceLog.objects.bulk_create([
@@ -360,11 +377,12 @@ class EndSessionView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class ActiveSessionsView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsStudent | IsSuperAdmin]
 
     def get(self, request):
         auto_close_expired_sessions()
         user = request.user
+        now = timezone.now()
 
         if user.role == 'student':
             try:
@@ -376,9 +394,9 @@ class ActiveSessionsView(APIView):
             if not student_division:
                 return Response({'error': 'Student not assigned to any division.'}, status=400)
 
-            # Get all active sessions for the student's division
-            # We filter by division primarily. 
+            # High Performance Query: select_related everything to avoid N+1
             sessions = AttendanceSession.objects.select_related(
+                'teacher',
                 'subject_allocation__subject',
                 'subject_allocation__teacher',
                 'subject_allocation__division',
@@ -387,44 +405,44 @@ class ActiveSessionsView(APIView):
                 status = 'active',
                 college = user.college,
                 subject_allocation__division = student_division,
-            )
+                actual_start__gt = now - timezone.timedelta(minutes=10)
+            ).order_by('-actual_start')
 
-            # Get student's active enrollments to differentiate Core vs Elective if needed
-            # For now, we allow any student in the division to see the session
-            # but we can prioritize enrollment if records exist.
-            enrolled_alloc_ids = list(StudentSubjectEnrollment.objects.filter(
-                student   = student_profile,
+            if not sessions.exists():
+                return Response([])
+
+            # Pre-fetch existing marks for this student
+            marked_session_ids = set(AttendanceLog.objects.filter(
+                student = user,
+                session__in = sessions
+            ).values_list('session_id', flat=True))
+
+            # Eligibility Optimization:
+            # 1. My explicit enrollments
+            alloc_ids = [s.subject_allocation_id for s in sessions]
+            my_enrolled_alloc_ids = set(StudentSubjectEnrollment.objects.filter(
+                student = student_profile,
+                subject_allocation_id__in = alloc_ids,
+                is_active = True
+            ).values_list('subject_allocation_id', flat=True))
+
+            # 2. Identify Elective vs Core subjects
+            # Allocations with ANY enrollments are treated as Electives
+            allocs_with_enrollments = set(StudentSubjectEnrollment.objects.filter(
+                subject_allocation_id__in = alloc_ids,
                 is_active = True
             ).values_list('subject_allocation_id', flat=True))
 
             result = []
             for s in sessions:
-                # Visibility Logic:
-                # 1. Student is explicitly enrolled
-                # 2. OR the student belongs to the division and there are NO explicit enrollments 
-                #    for this allocation (treating it as a Core/Auto-enrolled subject)
+                # Student is eligible if: 
+                # They are explicitly enrolled OR subject is Core (no explicit enrollments defined)
+                is_eligible = (s.subject_allocation_id in my_enrolled_alloc_ids) or \
+                              (s.subject_allocation_id not in allocs_with_enrollments)
                 
-                is_eligible = False
-                if s.subject_allocation_id in enrolled_alloc_ids:
-                    is_eligible = True
-                else:
-                    # Check if this allocation has ANY explicit enrollments.
-                    # If not, we treat it as a Core subject for the whole division.
-                    has_any_enrollments = StudentSubjectEnrollment.objects.filter(
-                        subject_allocation_id = s.subject_allocation_id,
-                        is_active = True
-                    ).exists()
-                    
-                    if not has_any_enrollments:
-                        is_eligible = True
-
                 if is_eligible:
-                    already_marked = AttendanceLog.objects.filter(
-                        session=s, student=user
-                    ).exists()
-                    
                     data = AttendanceSessionSerializer(s).data
-                    data['already_marked'] = already_marked
+                    data['already_marked'] = s.id in marked_session_ids
                     result.append(data)
 
             return Response(result)
@@ -490,39 +508,26 @@ class CheckLocationView(APIView):
                 status=404,
             )
 
-        if session.virtual_room is None:
-            return Response(
-                {'error': 'No virtual room assigned to this session.'},
-                status=400,
-            )
-
-        geo = check_inside_room(
-            float(data['lat']),
-            float(data['lng']),
-            float(data['altitude']),
-            session.virtual_room,
-            horizontal_accuracy=float(data.get('accuracy', 10.0)),
-            custom_radius=float(session.radius_meters),
-        )
-
+        # Determine effective room (use VirtualRoom if assigned, otherwise fallback to teacher-centered MockRoom)
         room = session.virtual_room
-        
-        # Center coordinates for geo-validation
-        center_lat = float(room.center_lat) if room else float(session.teacher_lat or 0)
-        center_lng = float(room.center_lng) if room else float(session.teacher_lng or 0)
-        min_alt    = float(room.min_altitude) if room else 0.0
-        max_alt    = float(room.max_altitude) if room else 50.0
+        if not room:
+            center_lat = float(session.teacher_lat or 0)
+            center_lng = float(session.teacher_lng or 0)
+            
+            class MockRoom:
+                def __init__(self, clat, clng, rad):
+                    self.center_lat = clat
+                    self.center_lng = clng
+                    self.min_altitude = 0.0
+                    self.max_altitude = 50.0
+                    self.radius_meters = rad
+                    self.has_polygon = False
 
-        # We need a small helper to mock a room-like structure for the util if room is None
-        class MockRoom:
-            def __init__(self, clat, clng, ralt_min, ralt_max, rad):
-                self.center_lat = clat
-                self.center_lng = clng
-                self.min_altitude = ralt_min
-                self.max_altitude = ralt_max
-                self.radius_meters = rad
-
-        effective_room = room if room else MockRoom(center_lat, center_lng, min_alt, max_alt, session.radius_meters)
+            effective_room = MockRoom(center_lat, center_lng, session.radius_meters)
+        else:
+            effective_room = room
+            center_lat = float(room.center_lat)
+            center_lng = float(room.center_lng)
 
         geo = check_inside_room(
             float(data['lat']),
@@ -551,10 +556,12 @@ class CheckLocationView(APIView):
             'altitude_ok'         : geo['altitude_ok'],
             'distance_to_boundary': geo['distance_to_boundary'],
             'distance_from_center': geo['distance_from_center'],
+            'radius_used'         : geo['radius_used'],
+            'validation_mode'     : geo['validation_mode'],
+            'accuracy_slack'      : geo['accuracy_slack_applied'],
             'session_code'        : session.session_code,
             'subject_name'        : session.subject_allocation.subject.name,
             'room_name'           : room.name if room else 'Classroom Area',
-            'room_radius_meters'  : session.radius_meters,
         })
 
 

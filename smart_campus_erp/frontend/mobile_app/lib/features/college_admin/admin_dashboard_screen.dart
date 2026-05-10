@@ -28,9 +28,10 @@ final adminStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
     departmentsCount = (res.data is List ? res.data : []).length;
   } catch (_) {}
 
+  int coursesCount = 0;
   try {
-    final res = await api.get('/api/subjects/');
-    subjectsCount = (res.data is List ? res.data : []).length;
+    final res = await api.get('/api/courses/');
+    coursesCount = (res.data is List ? res.data : []).length;
   } catch (_) {}
 
   return {
@@ -38,6 +39,7 @@ final adminStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
     'departments': departmentsCount,
     'subjects': subjectsCount,
     'pending': pendingCount,
+    'courses': coursesCount,
   };
 });
 
@@ -54,9 +56,11 @@ class AdminDashboardScreen extends ConsumerWidget {
     }
     final user = authState.user;
     final statsAsync = ref.watch(adminStatsProvider);
+    final isLab = user.role == 'lab_assistant';
+    final isAdmin = user.role == 'college_admin';
 
     return AppLayout(
-      title: 'College Admin',
+      title: isAdmin ? 'Academic Master' : 'Lab Administration',
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -73,7 +77,7 @@ class AdminDashboardScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '${user.collegeName ?? ""}  ·  College Administrator Mode',
+              '${user.collegeName ?? ""}  ·  ${isAdmin ? "Academic Management" : "Technical Staff"}',
               style: const TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 13,
@@ -96,34 +100,38 @@ class AdminDashboardScreen extends ConsumerWidget {
                 mainAxisSpacing: 16,
                 childAspectRatio: 1.2,
                 children: [
-                  StatCard(
-                    label: 'Total Users',
-                    value: '${stats['total_users']}',
-                    icon: Icons.people_rounded,
-                    accentColor: AppColors.primaryLight,
-                    subtitle: 'All campus users',
-                  ),
-                  StatCard(
-                    label: 'Departments',
-                    value: '${stats['departments']}',
-                    icon: Icons.apartment_rounded,
-                    accentColor: AppColors.accent,
-                    subtitle: 'Academic branches',
-                  ),
-                  StatCard(
-                    label: 'Subjects',
-                    value: '${stats['subjects']}',
-                    icon: Icons.menu_book_rounded,
-                    accentColor: AppColors.success,
-                    subtitle: 'Total registered',
-                  ),
-                  StatCard(
-                    label: 'Pending Approvals',
-                    value: '${stats['pending']}',
-                    icon: Icons.pending_actions_rounded,
-                    accentColor: AppColors.warning,
-                    subtitle: 'Users to approve',
-                  ),
+                  if (isAdmin) ...[
+                    StatCard(
+                      label: 'Departments',
+                      value: '${stats['departments']}',
+                      icon: Icons.apartment_rounded,
+                      accentColor: AppColors.primaryLight,
+                      subtitle: 'Active branches',
+                    ),
+                    StatCard(
+                      label: 'Courses',
+                      value: '${stats['courses']}',
+                      icon: Icons.school_rounded,
+                      accentColor: AppColors.accent,
+                      subtitle: 'Academic programs',
+                    ),
+                  ],
+                  if (isLab) ...[
+                    StatCard(
+                      label: 'Subjects',
+                      value: '${stats['subjects']}',
+                      icon: Icons.menu_book_rounded,
+                      accentColor: AppColors.success,
+                      subtitle: 'Total registered',
+                    ),
+                    StatCard(
+                      label: 'Enrollments',
+                      value: '${stats['total_users']}', // Simple placeholder
+                      icon: Icons.people_rounded,
+                      accentColor: AppColors.primaryLight,
+                      subtitle: 'Student pool',
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -148,26 +156,29 @@ class AdminDashboardScreen extends ConsumerWidget {
               mainAxisSpacing: 16,
               childAspectRatio: 1.3,
               children: [
-                if (user.role == 'college_admin') ...[
-                  const _QuickActionCard(
-                    label: 'Manage Users',
-                    icon: Icons.manage_accounts_rounded,
-                    color: AppColors.primaryLight,
-                    route: '/admin/users',
-                  ),
+                // COLLEGE ADMIN ONLY actions — Restricted to Academic Master
+                if (isAdmin) ...[
                   const _QuickActionCard(
                     label: 'Departments',
                     icon: Icons.apartment_rounded,
                     color: AppColors.accent,
                     route: '/admin/departments',
                   ),
-                ],
-                if (user.role == 'lab_assistant' || user.role == 'college_admin') ...[
                   const _QuickActionCard(
-                    label: 'Approvals',
-                    icon: Icons.how_to_reg_rounded,
+                    label: 'Courses',
+                    icon: Icons.school_rounded,
+                    color: AppColors.warning,
+                    route: '/admin/courses',
+                  ),
+                ],
+
+                // LAB ASSISTANT ONLY actions
+                if (isLab) ...[
+                  const _QuickActionCard(
+                    label: 'Academic Year',
+                    icon: Icons.event_note_rounded,
                     color: AppColors.primaryLight,
-                    route: '/principal/approvals', // Reusing the approvals screen
+                    route: '/admin/academic-years',
                   ),
                   const _QuickActionCard(
                     label: 'Virtual Rooms',
@@ -176,16 +187,10 @@ class AdminDashboardScreen extends ConsumerWidget {
                     route: '/admin/virtual-rooms',
                   ),
                   const _QuickActionCard(
-                    label: 'Face Register',
-                    icon: Icons.face_rounded,
-                    color: AppColors.warning,
-                    route: '/admin/face-register',
-                  ),
-                  const _QuickActionCard(
-                    label: 'Allocations',
-                    icon: Icons.assignment_ind_rounded,
+                    label: 'Enrollments',
+                    icon: Icons.how_to_reg_rounded,
                     color: AppColors.accent,
-                    route: '/admin/allocations',
+                    route: '/admin/enrollments',
                   ),
                 ],
               ],

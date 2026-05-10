@@ -91,6 +91,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'apps.core.db_middleware.DatabaseConnectionMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -200,3 +201,6 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM'               : 'user_id',
     'AUTH_TOKEN_CLASSES'          : ('rest_framework_simplejwt.tokens.AccessToken',),
 }
+# CORS Settings
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True

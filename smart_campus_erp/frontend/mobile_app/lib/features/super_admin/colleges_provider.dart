@@ -38,7 +38,8 @@ class CollegeCrudIdle    extends CollegeCrudState {}
 class CollegeCrudLoading extends CollegeCrudState {}
 class CollegeCrudSuccess extends CollegeCrudState {
   final String message;
-  CollegeCrudSuccess(this.message);
+  final Map<String, dynamic>? data;
+  CollegeCrudSuccess(this.message, {this.data});
 }
 class CollegeCrudError   extends CollegeCrudState {
   final String message;
@@ -55,8 +56,13 @@ class CollegeCrudNotifier extends StateNotifier<CollegeCrudState> {
     try {
       final res = await _api.post('/api/colleges/', data: data);
       _ref.invalidate(collegesProvider);
+      
+      final responseData = Map<String, dynamic>.from(res.data as Map);
       state = CollegeCrudSuccess(
-        res.data['message']?.toString() ?? 'College created.',
+        responseData['message']?.toString() ?? 'College created.',
+        data: responseData['admin_credentials'] != null 
+            ? Map<String, dynamic>.from(responseData['admin_credentials'] as Map)
+            : null,
       );
       return true;
     } on Exception catch (e) {

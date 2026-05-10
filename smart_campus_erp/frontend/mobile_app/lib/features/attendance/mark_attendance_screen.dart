@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/network/api_client.dart';
-import '../../core/services/location_service.dart';
-import '../../core/services/device_service.dart';
-import '../face_scan/face_scan_params.dart';
+import 'package:smart_campus_app/core/network/api_client.dart';
+import 'package:smart_campus_app/core/services/location_service.dart';
+import 'package:smart_campus_app/core/services/device_service.dart';
+import 'package:smart_campus_app/features/face_scan/face_scan_params.dart';
 
 enum LocStatus { idle, checking, inside, outside, error }
 
@@ -44,21 +44,22 @@ class _MarkAttendanceScreenState extends ConsumerState<MarkAttendanceScreen> wit
   Future<void> _checkLocation() async {
     setState(() => _state = const LocationCheckState(LocStatus.checking));
     try {
-      final loc = await LocationService().getCurrentLocation();
+      final pos = await LocationService().getCurrentPosition();
       final api = ref.read(apiClientProvider);
       final res = await api.post('/api/attendance/check-location/', data: {
         'session_id': widget.session.id,
-        'lat': loc['lat'],
-        'lng': loc['lng'],
-        'altitude': loc['altitude'],
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'altitude': pos.altitude,
+        'accuracy': pos.accuracy,
       });
       if (res.data['is_inside'] == true) {
         if (mounted) {
           setState(() {
             _state = const LocationCheckState(LocStatus.inside);
-            _currentLat = loc['lat'] ?? 0.0;
-            _currentLng = loc['lng'] ?? 0.0;
-            _currentAlt = loc['altitude'] ?? 0.0;
+            _currentLat = pos.latitude;
+            _currentLng = pos.longitude;
+            _currentAlt = pos.altitude;
           });
         }
       } else {

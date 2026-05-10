@@ -38,6 +38,11 @@ class SecureStorageService {
 
   static Future<String> getBaseUrl() async {
     final custom = await _storage.read(key: _baseUrlKey);
+    // CRITICAL: If custom URL is localhost or 127.0.0.1, it WILL fail on physical devices.
+    // We fall back to the LAN IP defined in AppConstants if we detect a loopback address.
+    if (custom != null && (custom.contains('localhost') || custom.contains('127.0.0.1'))) {
+      return AppConstants.baseUrl;
+    }
     return custom ?? AppConstants.baseUrl;
   }
 

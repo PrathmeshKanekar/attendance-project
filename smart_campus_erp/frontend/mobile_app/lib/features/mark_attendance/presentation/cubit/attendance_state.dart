@@ -12,6 +12,7 @@ enum AttendanceStep {
 }
 
 enum StepStatus { pending, processing, success, failed }
+enum LocationErrorType { none, serviceDisabled, permissionDenied, permissionPermanentlyDenied, other }
 
 class AttendanceState extends Equatable {
   final AttendanceStep currentStep;
@@ -28,6 +29,7 @@ class AttendanceState extends Equatable {
   final double? altitude;
   final String? deviceId;
   final Map<String, dynamic> sessionData;
+  final LocationErrorType locationErrorType;
 
   const AttendanceState({
     this.currentStep = AttendanceStep.sessionCheck,
@@ -51,6 +53,7 @@ class AttendanceState extends Equatable {
     this.altitude,
     this.deviceId,
     this.sessionData = const {},
+    this.locationErrorType = LocationErrorType.none,
   });
 
   AttendanceState copyWith({
@@ -68,6 +71,7 @@ class AttendanceState extends Equatable {
     double? altitude,
     String? deviceId,
     Map<String, dynamic>? sessionData,
+    LocationErrorType? locationErrorType,
   }) {
     return AttendanceState(
       currentStep: currentStep ?? this.currentStep,
@@ -84,6 +88,7 @@ class AttendanceState extends Equatable {
       altitude: altitude ?? this.altitude,
       deviceId: deviceId ?? this.deviceId,
       sessionData: sessionData ?? this.sessionData,
+      locationErrorType: locationErrorType ?? this.locationErrorType,
     );
   }
 
@@ -103,5 +108,6 @@ class AttendanceState extends Equatable {
         altitude,
         deviceId,
         sessionData,
+        locationErrorType,
       ];
 }

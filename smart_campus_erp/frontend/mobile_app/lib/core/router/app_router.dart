@@ -30,6 +30,7 @@ import '../../features/college_admin/divisions_screen.dart';
 import '../../features/college_admin/courses_screen.dart';
 import '../../features/college_admin/allocations_screen.dart';
 import '../../features/college_admin/enrollments_screen.dart';
+import '../../features/college_admin/academic_years_screen.dart';
 import '../../features/virtual_rooms/virtual_rooms_screen.dart';
 import '../../features/virtual_rooms/add_edit_room_screen.dart';
 import '../../features/virtual_rooms/room_detail_screen.dart';
@@ -206,6 +207,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           builder: (c, s) => const AllocationsScreen()),
       GoRoute(path: '/admin/enrollments',
           builder: (c, s) => const EnrollmentsScreen()),
+      GoRoute(path: '/admin/academic-years',
+          builder: (c, s) => const AcademicYearsScreen()),
 
       // Super Admin
       GoRoute(path: '/super-admin/dashboard',

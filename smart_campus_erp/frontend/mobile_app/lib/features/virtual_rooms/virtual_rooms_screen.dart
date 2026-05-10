@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/layout/app_layout.dart';
+import '../../core/providers/auth_provider.dart';
 import '../../core/widgets/empty_state_widget.dart';
 import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/loading_widget.dart';
@@ -23,7 +24,10 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final async = ref.watch(virtualRoomsProvider);
+    final async     = ref.watch(virtualRoomsProvider);
+    final authState = ref.watch(authProvider);
+    final user      = authState is AuthSuccess ? authState.user : null;
+    final isLab     = user?.role == 'lab_assistant';
 
     return AppLayout(
       title  : 'Virtual Rooms',
@@ -33,12 +37,14 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
           onPressed: () => ref.invalidate(virtualRoomsProvider),
         ),
       ],
-      fab: FloatingActionButton.extended(
-        onPressed      : () => context.push('/admin/virtual-rooms/add'),
-        icon           : const Icon(Icons.add_rounded),
-        label          : const Text('Add Room'),
-        backgroundColor: AppColors.primaryLight,
-      ),
+      fab: isLab 
+        ? FloatingActionButton.extended(
+            onPressed      : () => context.push('/admin/virtual-rooms/add'),
+            icon           : const Icon(Icons.add_rounded),
+            label          : const Text('Add Room'),
+            backgroundColor: AppColors.primaryLight,
+          )
+        : null,
       child: async.when(
         loading: () => const LoadingWidget(message: 'Loading rooms...'),
         error  : (e, _) => AppErrorWidget(
@@ -112,10 +118,10 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
               // ── Rooms grouped by building ───────────────
               Expanded(
                 child: filtered.isEmpty
-                    ? const EmptyStateWidget(
+                    ? EmptyStateWidget(
                         message : 'No virtual rooms yet',
                         icon    : Icons.sensor_door_rounded,
-                        subtitle: 'Tap + to add the first classroom',
+                        subtitle: isLab ? 'Tap + to add the first classroom' : 'No rooms configured for this college',
                       )
                     : ListView(
                         padding : const EdgeInsets.fromLTRB(16, 0, 16, 80),
@@ -165,6 +171,7 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
                             ...entry.value.map(
                               (room) => _RoomCard(
                                 room    : room,
+                                isLab   : isLab,
                                 onTap   : () => context.push(
                                   '/admin/virtual-rooms/${room['id']}',
                                 ),
@@ -248,12 +255,14 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
 // ── Room card ──────────────────────────────────────────────
 class _RoomCard extends StatelessWidget {
   final Map<String, dynamic> room;
+  final bool                 isLab;
   final VoidCallback         onTap;
   final VoidCallback         onEdit;
   final VoidCallback         onDelete;
 
   const _RoomCard({
     required this.room,
+    required this.isLab,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
@@ -349,28 +358,29 @@ class _RoomCard extends StatelessWidget {
             ),
 
             // Action buttons
-            Column(
-              children: [
-                IconButton(
-                  icon     : const Icon(
-                    Icons.edit_rounded,
-                    color: AppColors.textSecondary,
-                    size : 20,
+            if (isLab)
+              Column(
+                children: [
+                  IconButton(
+                    icon     : const Icon(
+                      Icons.edit_rounded,
+                      color: AppColors.textSecondary,
+                      size : 20,
+                    ),
+                    onPressed: onEdit,
+                    tooltip  : 'Edit',
                   ),
-                  onPressed: onEdit,
-                  tooltip  : 'Edit',
-                ),
-                IconButton(
-                  icon     : const Icon(
-                    Icons.delete_outline_rounded,
-                    color: AppColors.danger,
-                    size : 20,
+                  IconButton(
+                    icon     : const Icon(
+                      Icons.delete_outline_rounded,
+                      color: AppColors.danger,
+                      size : 20,
+                    ),
+                    onPressed: onDelete,
+                    tooltip  : 'Deactivate',
                   ),
-                  onPressed: onDelete,
-                  tooltip  : 'Deactivate',
-                ),
-              ],
-            ),
+                ],
+              ),
           ],
         ),
       ),

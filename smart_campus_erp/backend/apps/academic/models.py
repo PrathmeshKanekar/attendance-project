@@ -40,7 +40,7 @@ class Course(models.Model):
 class AcademicYear(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     college = models.ForeignKey('tenants.College', on_delete=models.CASCADE, related_name='academic_years')
-    name = models.CharField(max_length=50)
+    name = models.CharField(max_length=50) # e.g. 2025-2026
     start_date = models.DateField()
     end_date = models.DateField()
     is_current = models.BooleanField(default=False)
@@ -48,7 +48,14 @@ class AcademicYear(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        unique_together = ('college', 'name')
         db_table = 'academic_year'
+
+    def save(self, *args, **kwargs):
+        if self.is_current:
+            # Unset other current years for this college
+            AcademicYear.objects.filter(college=self.college, is_current=True).exclude(pk=self.pk).update(is_current=False)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.name} ({self.college.name})"

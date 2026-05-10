@@ -23,26 +23,42 @@ class FaceScanNotifier extends StateNotifier<FaceScanState> {
     state = FaceScanScanning();
   }
 
+  int _lastBlinkTime = 0;
+
   void processFaceDetection(Face face) {
     if (state is! FaceScanScanning && state is! FaceScanBlinking) return;
     if (_captureTriggered) return;
 
-    final leftEye = face.leftEyeOpenProbability ?? 1.0;
-    final rightEye = face.rightEyeOpenProbability ?? 1.0;
-    final avgOpen = (leftEye + rightEye) / 2;
-    final isClosed = avgOpen < 0.25;
-    final isOpen = avgOpen > 0.60;
+    final double leftEye = face.leftEyeOpenProbability ?? 1.0;
+    final double rightEye = face.rightEyeOpenProbability ?? 1.0;
+    
+    // Use the lower probability to ensure both eyes are closed for a 'blink'
+    // This is more robust against head tilts or side lighting
+    final double eyeOpenness = (leftEye + rightEye) / 2;
+    
+    // High-precision Hysteresis Thresholds
+    const double kClosedThreshold = 0.15; // Must be very closed
+    const double kOpenThreshold = 0.75;   // Must be very open
+    
+    final int now = DateTime.now().millisecondsSinceEpoch;
 
-    if (isClosed && !_eyeWasClosed) {
+    if (eyeOpenness < kClosedThreshold && !_eyeWasClosed) {
       _eyeWasClosed = true;
-    } else if (isOpen && _eyeWasClosed) {
+    } else if (eyeOpenness > kOpenThreshold && _eyeWasClosed) {
+      // Transition from closed to open detected
       _eyeWasClosed = false;
-      _blinkCount++;
-      if (_blinkCount >= 3) {
-        _captureTriggered = true;
-        state = FaceScanCapturing();
-      } else {
-        state = FaceScanBlinking(_blinkCount);
+      
+      // Cooldown to prevent double-counting a single blink (minimum 250ms between blinks)
+      if (now - _lastBlinkTime > 250) {
+        _blinkCount++;
+        _lastBlinkTime = now;
+        
+        if (_blinkCount >= 3) {
+          _captureTriggered = true;
+          state = FaceScanCapturing();
+        } else {
+          state = FaceScanBlinking(_blinkCount);
+        }
       }
     }
   }

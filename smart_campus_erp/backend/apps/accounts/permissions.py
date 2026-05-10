@@ -59,11 +59,11 @@ class IsLabAssistant(BasePermission):
 
 class IsCollegeScopedStaff(BasePermission):
     """
-    Allows: college_admin, principal, hod, lab_assistant.
-    All scoped to their own college.
+    Allows: principal, hod, lab_assistant.
+    College Admin is excluded as they only handle Departments/Courses now.
     """
     ALLOWED_ROLES = [
-        'college_admin', 'principal', 'hod', 'lab_assistant',
+        'principal', 'hod', 'lab_assistant',
     ]
 
     def has_permission(self, request, view):
@@ -74,10 +74,10 @@ class IsCollegeScopedStaff(BasePermission):
 
 
 class IsTeacherOrAbove(BasePermission):
-    """Teacher, HOD, Principal, CollegeAdmin, SuperAdmin."""
+    """Teacher, HOD, Principal, SuperAdmin."""
     ALLOWED_ROLES = [
         'teacher', 'hod', 'principal',
-        'college_admin', 'super_admin', 'lab_assistant',
+        'super_admin', 'lab_assistant',
     ]
 
     def has_permission(self, request, view):
@@ -88,8 +88,9 @@ class IsTeacherOrAbove(BasePermission):
 
 
 class IsCollegeScopedAdmin(BasePermission):
+    """Principal, HOD, Lab Assistant."""
     ALLOWED_ROLES = [
-        'college_admin', 'principal', 'hod', 'lab_assistant',
+        'principal', 'hod', 'lab_assistant',
     ]
 
     def has_permission(self, request, view):

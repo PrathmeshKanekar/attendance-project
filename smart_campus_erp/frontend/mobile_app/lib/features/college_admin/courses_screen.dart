@@ -84,7 +84,12 @@ class CoursesScreen extends ConsumerWidget {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        content: Form(
+        content: departments.isEmpty 
+          ? const SizedBox(
+              height: 100,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          : Form(
           key : formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -113,6 +118,7 @@ class CoursesScreen extends ConsumerWidget {
               DropdownButtonFormField<String>(
                 value: selectedDeptId,
                 hint: const Text('Select Department'),
+                isExpanded: true,
                 items: departments.map((d) {
                   return DropdownMenuItem<String>(
                     value: d['id'].toString(),
@@ -126,7 +132,8 @@ class CoursesScreen extends ConsumerWidget {
               DropdownButtonFormField<int>(
                 value: selectedDuration,
                 hint: const Text('Duration in years'),
-                items: [2, 3, 4].map((d) {
+                isExpanded: true,
+                items: [2, 3, 4, 5].map((d) {
                   return DropdownMenuItem<int>(
                     value: d,
                     child: Text('$d Years'),

@@ -65,6 +65,29 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
+    PROTECTED_EMAIL = 'superadmin@app.com'
+
+    def save(self, *args, **kwargs):
+        # Prevent modification of protected super admin by non-DB methods if needed
+        # But here we focus on preventing specific attribute changes via API
+        if self.email == self.PROTECTED_EMAIL:
+            # If the user exists in DB, force certain values
+            try:
+                orig = User.objects.get(pk=self.pk)
+                if orig.email == self.PROTECTED_EMAIL:
+                    self.is_active = True
+                    self.is_approved = True
+                    self.role = 'super_admin'
+                    self.is_superuser = True
+            except User.DoesNotExist:
+                pass
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.email == self.PROTECTED_EMAIL:
+            raise PermissionError("The permanent super admin account cannot be deleted.")
+        super().delete(*args, **kwargs)
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 

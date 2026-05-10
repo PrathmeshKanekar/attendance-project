@@ -44,11 +44,6 @@ class NavConfig {
             route : '/admin/dashboard',
           ),
           NavItem(
-            label : 'Users',
-            icon  : Icons.people_rounded,
-            route : '/admin/users',
-          ),
-          NavItem(
             label : 'Departments',
             icon  : Icons.apartment_rounded,
             route : '/admin/departments',
@@ -57,31 +52,6 @@ class NavConfig {
             label : 'Courses',
             icon  : Icons.school_rounded,
             route : '/admin/courses',
-          ),
-          NavItem(
-            label : 'Subjects',
-            icon  : Icons.menu_book_rounded,
-            route : '/admin/subjects',
-          ),
-          NavItem(
-            label : 'Divisions',
-            icon  : Icons.group_work_rounded,
-            route : '/admin/divisions',
-          ),
-          NavItem(
-            label : 'Virtual Rooms',
-            icon  : Icons.sensor_door_rounded,
-            route : '/admin/virtual-rooms',
-          ),
-          NavItem(
-            label : 'Face Register',
-            icon  : Icons.face_rounded,
-            route : '/admin/face-register',
-          ),
-          NavItem(
-            label : 'Reports',
-            icon  : Icons.bar_chart_rounded,
-            route : '/admin/reports',
           ),
         ];
 
@@ -93,9 +63,14 @@ class NavConfig {
             route : '/admin/dashboard',
           ),
           NavItem(
-            label : 'Students',
-            icon  : Icons.people_rounded,
-            route : '/admin/users',
+            label : 'Academic Years',
+            icon  : Icons.calendar_today_rounded,
+            route : '/admin/academic-years',
+          ),
+          NavItem(
+            label : 'Virtual Rooms',
+            icon  : Icons.sensor_door_rounded,
+            route : '/admin/virtual-rooms',
           ),
           NavItem(
             label : 'Subjects',
@@ -111,16 +86,6 @@ class NavConfig {
             label : 'Enrollments',
             icon  : Icons.how_to_reg_rounded,
             route : '/admin/enrollments',
-          ),
-          NavItem(
-            label : 'Virtual Rooms',
-            icon  : Icons.sensor_door_rounded,
-            route : '/admin/virtual-rooms',
-          ),
-          NavItem(
-            label : 'Face Register',
-            icon  : Icons.face_rounded,
-            route : '/admin/face-register',
           ),
         ];
 
