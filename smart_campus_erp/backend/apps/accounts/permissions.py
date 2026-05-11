@@ -8,6 +8,9 @@ class IsSuperAdmin(BasePermission):
             and request.user.role == 'super_admin'
         )
 
+    def has_object_permission(self, request, view, obj):
+        return True
+
 
 class IsCollegeAdmin(BasePermission):
     def has_permission(self, request, view):
@@ -15,6 +18,28 @@ class IsCollegeAdmin(BasePermission):
             request.user.is_authenticated
             and request.user.role == 'college_admin'
         )
+
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
+
+
+class IsSameCollege(BasePermission):
+    def has_object_permission(self, request, view, obj):
+        if not request.user.is_authenticated:
+            return False
+        if request.user.role == 'super_admin':
+            return True
+        # Assuming obj has a college field or IS a college
+        obj_college = obj if hasattr(obj, 'timezone') else getattr(obj, 'college', None)
+        return obj_college == request.user.college
+
+
+class IsCollegeActiveAndSubscribed(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated or not request.user.college:
+            return False
+        college = request.user.college
+        return college.is_active and not college.is_suspended
 
 
 class IsPrincipal(BasePermission):
@@ -24,6 +49,9 @@ class IsPrincipal(BasePermission):
             and request.user.role == 'principal'
         )
 
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
+
 
 class IsHOD(BasePermission):
     def has_permission(self, request, view):
@@ -31,6 +59,9 @@ class IsHOD(BasePermission):
             request.user.is_authenticated
             and request.user.role == 'hod'
         )
+
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
 
 
 class IsTeacher(BasePermission):
@@ -40,6 +71,9 @@ class IsTeacher(BasePermission):
             and request.user.role == 'teacher'
         )
 
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
+
 
 class IsStudent(BasePermission):
     def has_permission(self, request, view):
@@ -48,6 +82,9 @@ class IsStudent(BasePermission):
             and request.user.role == 'student'
         )
 
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
+
 
 class IsLabAssistant(BasePermission):
     def has_permission(self, request, view):
@@ -55,6 +92,9 @@ class IsLabAssistant(BasePermission):
             request.user.is_authenticated
             and request.user.role == 'lab_assistant'
         )
+
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
 
 
 class IsCollegeScopedStaff(BasePermission):
@@ -72,32 +112,8 @@ class IsCollegeScopedStaff(BasePermission):
             and request.user.role in self.ALLOWED_ROLES
         )
 
-
-class IsTeacherOrAbove(BasePermission):
-    """Teacher, HOD, Principal, SuperAdmin."""
-    ALLOWED_ROLES = [
-        'teacher', 'hod', 'principal',
-        'super_admin', 'lab_assistant',
-    ]
-
-    def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role in self.ALLOWED_ROLES
-        )
-
-
-class IsCollegeScopedAdmin(BasePermission):
-    """Principal, HOD, Lab Assistant."""
-    ALLOWED_ROLES = [
-        'principal', 'hod', 'lab_assistant',
-    ]
-
-    def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role in self.ALLOWED_ROLES
-        )
+    def has_object_permission(self, request, view, obj):
+        return IsSameCollege().has_object_permission(request, view, obj)
 
 
 class CollegeScopedMixin:

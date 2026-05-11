@@ -73,6 +73,9 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
 
   @override
   void dispose() {
+    if (_controller != null && _controller!.value.isStreamingImages) {
+      _controller!.stopImageStream();
+    }
     _controller?.dispose();
     _faceDetector?.close();
     _compassSub?.cancel();
@@ -178,10 +181,14 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
       } else if (avgOpen > 0.70 && _eyeWasClosed) {
         _eyeWasClosed = false;
         if (mounted) {
-          setState(() {
-            _blinkCount++;
-            if (_blinkCount >= 3) {
-              _livenessPassed = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _blinkCount++;
+                if (_blinkCount >= 3) {
+                  _livenessPassed = true;
+                }
+              });
             }
           });
         }

@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import DeviceRegistry
-from apps.accounts.permissions import IsTeacher, IsStudent, IsCollegeScopedStaff
+from apps.accounts.permissions import IsTeacher, IsStudent, IsCollegeScopedStaff, IsSuperAdmin
 from apps.academic.models import SubjectAllocation
 from apps.students.models import StudentProfile, StudentSubjectEnrollment
 from apps.virtual_rooms.models import VirtualRoom

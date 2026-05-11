@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from apps.core.mixins import CollegeScopedMixin
-from apps.core.permissions import IsCollegeAdmin, IsPrincipal
+from apps.accounts.permissions import IsCollegeAdmin, IsPrincipal
 from .models import StaffProfile, ApprovalRequest
 from .serializers import StaffProfileSerializer, ApprovalRequestSerializer
 

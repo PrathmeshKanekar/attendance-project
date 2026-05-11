@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.permissions import (
-    IsCollegeScopedStaff, IsSuperAdmin, IsTeacher, IsLabAssistant,
+    IsCollegeScopedStaff, IsSuperAdmin, IsLabAssistant, IsCollegeAdmin,
 )
 from .models import (
     Department, Course, AcademicYear,

@@ -259,8 +259,12 @@ class _NavItemTileState extends ConsumerState<_NavItemTile> {
                 Navigator.of(context).pop();
               }
 
-              // CRITICAL FIX 4: use go() for clean stack
-              context.go(widget.item.route);
+              // CRITICAL FIX 4: use go() in next frame to allow drawer to start closing
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (context.mounted) {
+                  context.go(widget.item.route);
+                }
+              });
             },
             hoverColor  : Colors.white.withOpacity(0.08),
             splashColor : Colors.white.withOpacity(0.12),

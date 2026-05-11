@@ -83,7 +83,11 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
       final faces = await _faceDetector!.processImage(inputImage);
       
       if (mounted) {
-        setState(() => _facesDetected = faces.isNotEmpty);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() => _facesDetected = faces.isNotEmpty);
+          }
+        });
       }
 
       if (faces.isNotEmpty) {
@@ -167,7 +171,9 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
 
   @override
   void dispose() {
-    _captureDone = true; // Prevent further processing
+    if (_controller != null && _controller!.value.isStreamingImages) {
+      _controller!.stopImageStream();
+    }
     _controller?.dispose();
     _faceDetector?.close();
     super.dispose();

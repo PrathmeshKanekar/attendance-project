@@ -129,22 +129,33 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
 
     // Start of blink: either eye closes
     if (eitherClosed && !_leftClosed && !_rightClosed) {
-      setState(() {
-        _leftClosed = true;
-        _rightClosed = true;
-      });
-      debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _leftClosed = true;
+              _rightClosed = true;
+            });
+            debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
+          }
+        });
+      }
     } 
     // End of blink: BOTH eyes must reopen to a reasonable level
-    // OR if we were closed and we detect a significant opening of either eye (handle glasses glare)
-    else if (_leftClosed && _rightClosed && (bothOpened || (leftOpen > 0.7 || rightOpen > 0.7))) {
-      setState(() {
-        _leftClosed = false;
-        _rightClosed = false;
-        _blinkCount++;
-      });
-      debugPrint("BLINK END: Count=$_blinkCount");
-      context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
+    else if (_leftClosed && _rightClosed && bothOpened) {
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _leftClosed = false;
+              _rightClosed = false;
+              _blinkCount++;
+            });
+            debugPrint("BLINK END: Count=$_blinkCount");
+            context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
+          }
+        });
+      }
     }
   }
 
@@ -336,7 +347,11 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
             ),
           
           if (!isLivenessSuccess && state.isFaceCentered)
-             const _ScanLine(),
+            const Positioned(
+              left: 0,
+              right: 0,
+              child: _ScanLine(),
+            ),
         ],
       ),
     );
@@ -370,23 +385,27 @@ class _ScanLineState extends State<_ScanLine> with SingleTickerProviderStateMixi
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
-        return Positioned(
-          top: 40 + (180 * _controller.value),
-          child: Container(
-            width: 200,
-            height: 2,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.primaryLight.withOpacity(0),
-                  AppColors.primaryLight,
-                  AppColors.primaryLight.withOpacity(0),
-                ],
-              ),
-            ),
-          ),
+        return Transform.translate(
+          offset: Offset(0, 40 + (180 * _controller.value)),
+          child: child,
         );
       },
+      child: Center(
+        child: Container(
+          width: 200,
+          height: 2,
+          decoration: BoxDecoration(
+            color: AppColors.primaryLight,
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primaryLight.withOpacity(0.5),
+                blurRadius: 8,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
