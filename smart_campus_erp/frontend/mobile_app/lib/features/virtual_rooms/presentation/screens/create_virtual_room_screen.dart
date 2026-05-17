@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
+import 'dart:math' as math;
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/layout/app_layout.dart';
@@ -77,6 +78,19 @@ class _CreateVirtualRoomScreenState extends ConsumerState<CreateVirtualRoomScree
     _latCtrl.dispose();
     _lngCtrl.dispose();
     super.dispose();
+  }
+
+  List<Map<String, double>> _cornersToLocalXY(List<CornerData> corners) {
+    if (corners.isEmpty) return [];
+    const double latToM = 111111.0;
+    final origin = corners.first;
+    final lngToM = latToM * math.cos(origin.lat * math.pi / 180.0);
+
+    return corners.map((c) {
+      final x = (c.lng - origin.lng) * lngToM;
+      final y = (c.lat - origin.lat) * latToM;
+      return {'x': x, 'y': y};
+    }).toList();
   }
 
   Future<void> _fetchCurrentLocation() async {
@@ -426,14 +440,45 @@ class _CreateVirtualRoomScreenState extends ConsumerState<CreateVirtualRoomScree
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: AppColors.borderColor),
               ),
-              child: CustomPaint(
-                painter: RoomPreviewPainter(
-                  corners: _capturedCorners.map((c) => {'x': c.heading, 'y': c.heading * 0.8}).toList(), // placeholder mock scaling on coordinates
-                  headingAngle: '0.0',
-                  length: 10.0,
-                  width: 10.0,
-                  area: 100.0,
-                ),
+              child: Builder(
+                builder: (context) {
+                  final localXY = _cornersToLocalXY(_capturedCorners);
+                  double len = 10.0;
+                  double wid = 10.0;
+                  double areaVal = 100.0;
+                  if (_capturedCorners.length >= 2) {
+                    len = Geolocator.distanceBetween(
+                      _capturedCorners[0].lat,
+                      _capturedCorners[0].lng,
+                      _capturedCorners[1].lat,
+                      _capturedCorners[1].lng,
+                    );
+                  }
+                  if (_capturedCorners.length >= 4) {
+                    wid = Geolocator.distanceBetween(
+                      _capturedCorners[0].lat,
+                      _capturedCorners[0].lng,
+                      _capturedCorners[3].lat,
+                      _capturedCorners[3].lng,
+                    );
+                    double sum = 0.0;
+                    for (int i = 0; i < 4; i++) {
+                      final current = localXY[i];
+                      final next = localXY[(i + 1) % 4];
+                      sum += (current['x']! * next['y']!) - (next['x']! * current['y']!);
+                    }
+                    areaVal = sum.abs() / 2.0;
+                  }
+                  return CustomPaint(
+                    painter: RoomPreviewPainter(
+                      corners: localXY,
+                      headingAngle: _capturedCorners.isNotEmpty ? _capturedCorners[0].heading.toStringAsFixed(1) : '0.0',
+                      length: len,
+                      width: wid,
+                      area: areaVal,
+                    ),
+                  );
+                }
               ),
             ),
           ],

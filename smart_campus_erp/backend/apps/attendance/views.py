@@ -529,14 +529,25 @@ class CheckLocationView(APIView):
             center_lat = float(room.center_lat)
             center_lng = float(room.center_lng)
 
+        # Call check_inside_room with correct keyword arguments matching geo_utils.py signature
         geo = check_inside_room(
-            float(data['lat']),
-            float(data['lng']),
-            float(data['altitude']),
-            effective_room,
-            horizontal_accuracy=float(data.get('accuracy', 10.0)),
-            custom_radius=float(session.radius_meters),
+            student_lat=float(data['lat']),
+            student_lng=float(data['lng']),
+            student_alt=float(data['altitude']),
+            room=effective_room,
+            gps_accuracy=float(data.get('accuracy', 10.0)),
+            sensors=data.get('sensors', {}),
         )
+
+        from apps.virtual_rooms.geo_utils import haversine_distance
+        dist_from_center = haversine_distance(float(data['lat']), float(data['lng']), center_lat, center_lng)
+        radius_used = float(session.radius_meters)
+        if room:
+            if getattr(room, 'has_polygon', False):
+                radius_used = max(getattr(room, 'length', 20.0) or 20.0, getattr(room, 'width', 20.0) or 20.0) * 0.7
+            else:
+                radius_used = getattr(room, 'radius_meters', 30.0)
+        accuracy_slack = min(float(data.get('accuracy', 10.0)) * 0.5, 15.0)
 
         logger.info(
             'GEO-CHECK: user=%s session=%s | '
@@ -546,19 +557,19 @@ class CheckLocationView(APIView):
             request.user.email, session.session_code,
             float(data['lat']), float(data['lng']), float(data['altitude']),
             center_lat, center_lng, 
-            geo['radius_used'],
-            geo['distance_from_center'], geo['inside'], geo['altitude_ok'],
+            radius_used,
+            dist_from_center, geo.get('is_valid', False), geo.get('altitude_ok', False),
         )
 
         return Response({
-            'is_inside'           : geo['inside'],
-            'inside_2d'           : geo['inside_2d'],
-            'altitude_ok'         : geo['altitude_ok'],
-            'distance_to_boundary': geo['distance_to_boundary'],
-            'distance_from_center': geo['distance_from_center'],
-            'radius_used'         : geo['radius_used'],
-            'validation_mode'     : geo['validation_mode'],
-            'accuracy_slack'      : geo['accuracy_slack_applied'],
+            'is_inside'           : geo.get('is_valid', False),
+            'inside_2d'           : geo.get('inside_2d', False),
+            'altitude_ok'         : geo.get('altitude_ok', False),
+            'distance_to_boundary': geo.get('distance_to_boundary', 0.0),
+            'distance_from_center': dist_from_center,
+            'radius_used'         : radius_used,
+            'validation_mode'     : geo.get('validation_mode', 'radius'),
+            'accuracy_slack'      : accuracy_slack,
             'session_code'        : session.session_code,
             'subject_name'        : session.subject_allocation.subject.name,
             'room_name'           : room.name if room else 'Classroom Area',
@@ -705,13 +716,14 @@ class MarkAttendanceView(APIView):
 
         effective_room = room if room else MockRoom(center_lat, center_lng, 0.0, 50.0, session.radius_meters)
 
+        # Call check_inside_room with correct keyword arguments matching geo_utils.py signature
         geo = check_inside_room(
-            float(data['lat']),
-            float(data['lng']),
-            float(data['altitude']),
-            effective_room,
-            horizontal_accuracy=float(data.get('accuracy', 10.0)),
-            custom_radius=float(session.radius_meters),
+            student_lat=float(data['lat']),
+            student_lng=float(data['lng']),
+            student_alt=float(data['altitude']),
+            room=effective_room,
+            gps_accuracy=float(data.get('accuracy', 10.0)),
+            sensors=data.get('sensors', {}),
         )
 
         # ── EXTRA SECURITY: Teacher-Student Proximity Check ──
@@ -729,21 +741,22 @@ class MarkAttendanceView(APIView):
                     'details': f'Distance: {dist_to_teacher:.1f}m'
                 }, status=403)
 
-        if not geo['inside']:
+        if not geo.get('is_valid', False):
             reason = []
-            if not geo['inside_2d']:
+            dist_to_boundary = geo.get('distance_to_boundary', 0.0)
+            if not geo.get('inside_2d', False):
                 reason.append(
-                    f'You are {geo["distance_to_boundary"]}m outside '
+                    f'You are {dist_to_boundary}m outside '
                     f'the classroom boundary.'
                 )
-            if not geo['altitude_ok']:
+            if not geo.get('altitude_ok', False):
                 reason.append('You appear to be on the wrong floor.')
             return Response(
                 {
                     'error'               : ' '.join(reason) or 'Outside classroom.',
-                    'distance_to_boundary': geo['distance_to_boundary'],
-                    'inside_2d'           : geo['inside_2d'],
-                    'altitude_ok'         : geo['altitude_ok'],
+                    'distance_to_boundary': dist_to_boundary,
+                    'inside_2d'           : geo.get('inside_2d', False),
+                    'altitude_ok'         : geo.get('altitude_ok', False),
                     'step_failed'         : 'geo',
                 },
                 status=403,

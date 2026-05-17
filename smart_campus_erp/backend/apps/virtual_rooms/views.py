@@ -53,10 +53,17 @@ class VirtualRoomViewSet(viewsets.ModelViewSet):
             try:
                 corner = serializer.save()
                 room = corner.room
+                corner_count = room.corners.count()
+                
+                if corner_count >= 4:
+                    from .geo_utils import calculate_spatial_vectors
+                    calculate_spatial_vectors(room)
+                    room.refresh_from_db()
+
                 return Response({
                     "status": "Corner captured successfully",
                     "corner_index": corner.corner_index,
-                    "corner_count": room.corners.count(),
+                    "corner_count": corner_count,
                     "room_finalized": room.use_polygon,
                 }, status=status.HTTP_200_OK)
             except Exception as e:

@@ -186,7 +186,7 @@ class RoomCaptureNotifier extends StateNotifier<RoomCaptureState> {
       return;
     }
 
-    // 5. Duplicate Check + Distance check (Threshold: 1.5 meters)
+    // 5. Duplicate Check + Distance check (Threshold: 1.5 meters from last, 2.0 meters from any prev corner)
     if (state.capturedCorners.isNotEmpty) {
       final last = state.capturedCorners.last;
       final dist = haversineDistance(
@@ -199,7 +199,7 @@ class RoomCaptureNotifier extends StateNotifier<RoomCaptureState> {
       if (dist < 1.5) {
         state = state.copyWith(
           isCapturing: false,
-          error: "Move to a different physical corner before capturing (dist: ${dist.toStringAsFixed(1)}m).",
+          error: "Move to a different physical corner before capturing (minimum 1.5m).",
         );
         return;
       }
@@ -212,10 +212,10 @@ class RoomCaptureNotifier extends StateNotifier<RoomCaptureState> {
           avgLat,
           avgLng,
         );
-        if (distToPrev < 1.5) {
+        if (distToPrev < 2.0) {
           state = state.copyWith(
             isCapturing: false,
-            error: "Corner duplicate detected. Move to a new corner.",
+            error: "Too close to Corner ${i + 1} (dist: ${distToPrev.toStringAsFixed(1)}m). Must be >= 2.0m.",
           );
           return;
         }

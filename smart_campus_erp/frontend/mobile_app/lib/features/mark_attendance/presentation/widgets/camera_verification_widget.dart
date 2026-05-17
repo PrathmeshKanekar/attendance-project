@@ -22,8 +22,9 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   FaceDetector? _faceDetector;
   bool _isBusy = false;
   int _blinkCount = 0;
-  bool _leftClosed = false;
-  bool _rightClosed = false;
+  bool _eyesClosed = false;           // FIXED: unified closed state Task 3
+  DateTime? _blinkStartTime;
+  static const _blinkCooldownMs = 500; // FIXED: prevent double-counting Task 3
 
   @override
   void initState() {
@@ -69,13 +70,16 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
       
       if (faces.isNotEmpty) {
         final face = faces.first;
+        if (!mounted) return;
         final isGoodPosition = _validateFacePosition(face, image);
         
-        if (isGoodPosition) {
+        if (isGoodPosition && mounted) {
           _checkBlink(face);
         }
       } else {
-        context.read<AttendanceCubit>().updateFaceGuidance("Face not detected", false);
+        if (mounted) {
+          context.read<AttendanceCubit>().updateFaceGuidance("Face not detected", false);
+        }
       }
     } catch (e) {
       debugPrint('Error processing image: $e');
@@ -85,6 +89,7 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   }
 
   bool _validateFacePosition(Face face, CameraImage image) {
+    if (!mounted) return false;
     final boundingBox = face.boundingBox;
     
     // 1. Check Face Size (Must be close enough)
@@ -114,47 +119,42 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   }
 
   void _checkBlink(Face face) {
-    final leftOpen = face.leftEyeOpenProbability ?? 1.0;
+    final leftOpen  = face.leftEyeOpenProbability  ?? 1.0;
     final rightOpen = face.rightEyeOpenProbability ?? 1.0;
 
-    // PRODUCTION-LEVEL HYSTERESIS
-    // Close threshold is strict (must close significantly)
-    // Open threshold is looser (must open reasonably)
     const closedThresh = 0.20;
     const openThresh   = 0.55;
-    
-    // Liveness Detection State Machine
-    bool eitherClosed = leftOpen < closedThresh || rightOpen < closedThresh;
-    bool bothOpened   = leftOpen > openThresh && rightOpen > openThresh;
 
-    // Start of blink: either eye closes
-    if (eitherClosed && !_leftClosed && !_rightClosed) {
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            setState(() {
-              _leftClosed = true;
-              _rightClosed = true;
-            });
-            debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
-          }
-        });
+    final eitherClosed = leftOpen < closedThresh || rightOpen < closedThresh;
+    final bothOpen     = leftOpen > openThresh   && rightOpen > openThresh;
+
+    if (eitherClosed && !_eyesClosed) {
+      // Blink START — eyes just closed
+      _eyesClosed     = true;
+      _blinkStartTime = DateTime.now();
+      debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
+    } else if (_eyesClosed && bothOpen) {
+      // Blink END — eyes reopened
+      if (_blinkStartTime == null) {
+        _eyesClosed = false;
+        return;
       }
-    } 
-    // End of blink: BOTH eyes must reopen to a reasonable level
-    else if (_leftClosed && _rightClosed && bothOpened) {
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            setState(() {
-              _leftClosed = false;
-              _rightClosed = false;
-              _blinkCount++;
-            });
-            debugPrint("BLINK END: Count=$_blinkCount");
-            context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
-          }
-        });
+      final elapsed = DateTime.now().difference(_blinkStartTime!).inMilliseconds;
+
+      // Valid blink: eyes were closed for at least 80ms (natural blink) and cooldown met
+      if (elapsed >= 80 && elapsed <= _blinkCooldownMs) {
+        _eyesClosed = false;
+        _blinkCount++;
+        debugPrint("BLINK COUNTED: $_blinkCount (duration: ${elapsed}ms)");
+
+        if (mounted) {
+          setState(() {}); // refresh _BlinkIndicator count display
+          context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
+        }
+      } else {
+        // Too fast or too slow — noise/artifact, reset without counting
+        _eyesClosed = false;
+        debugPrint("BLINK IGNORED (duration: ${elapsed}ms)");
       }
     }
   }
@@ -285,7 +285,7 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
             
-            if (state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch)
+            if ((state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch) && state.isInsideRoom)
               Padding(
                 padding: const EdgeInsets.only(top: 24),
                 child: ElevatedButton(
@@ -315,7 +315,6 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
 
   Widget _buildCameraOverlay(AttendanceState state) {
     bool isLivenessSuccess = state.stepStatuses[AttendanceStep.livenessDetection] == StepStatus.success;
-    bool isProcessing = state.stepStatuses[AttendanceStep.livenessDetection] == StepStatus.processing;
 
     return Container(
       width: 260,
