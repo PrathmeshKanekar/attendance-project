@@ -13,6 +13,10 @@ class IsSuperAdmin(BasePermission):
 
 
 class IsCollegeAdmin(BasePermission):
+    """
+    College Admin can handle ONLY: new users add, academic year master, departments, courses.
+    They should NOT access: approvals, attendance, virtual rooms, etc.
+    """
     def has_permission(self, request, view):
         return (
             request.user.is_authenticated
@@ -21,6 +25,24 @@ class IsCollegeAdmin(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         return IsSameCollege().has_object_permission(request, view, obj)
+
+
+class IsPrincipalOnly(BasePermission):
+    """ONLY Principal can approve teachers, lab assistants, HODs, other staff."""
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.role == 'principal'
+        )
+
+
+class IsLabAssistantOnly(BasePermission):
+    """ONLY Lab Assistant can manage virtual rooms (create, edit, delete)."""
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.role == 'lab_assistant'
+        )
 
 
 class IsSameCollege(BasePermission):
@@ -99,11 +121,11 @@ class IsLabAssistant(BasePermission):
 
 class IsCollegeScopedStaff(BasePermission):
     """
-    Allows: principal, hod, lab_assistant.
+    Allows: principal, hod, lab_assistant, teacher.
     College Admin is excluded as they only handle Departments/Courses now.
     """
     ALLOWED_ROLES = [
-        'principal', 'hod', 'lab_assistant',
+        'principal', 'hod', 'lab_assistant', 'teacher'
     ]
 
     def has_permission(self, request, view):

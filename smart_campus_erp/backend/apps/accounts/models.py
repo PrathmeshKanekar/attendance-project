@@ -69,9 +69,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def save(self, *args, **kwargs):
         # Prevent modification of protected super admin by non-DB methods if needed
-        # But here we focus on preventing specific attribute changes via API
         if self.email == self.PROTECTED_EMAIL:
-            # If the user exists in DB, force certain values
             try:
                 orig = User.objects.get(pk=self.pk)
                 if orig.email == self.PROTECTED_EMAIL:
@@ -80,7 +78,18 @@ class User(AbstractBaseUser, PermissionsMixin):
                     self.role = 'super_admin'
                     self.is_superuser = True
             except User.DoesNotExist:
-                pass
+                # First time creation of protected email
+                self.is_active = True
+                self.is_approved = True
+                self.role = 'super_admin'
+                self.is_superuser = True
+        
+        # Requirement: Principal should NOT require approval.
+        # Principal account becomes active immediately after creation.
+        if self.role == 'principal':
+            self.is_active = True
+            self.is_approved = True
+            
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -96,6 +105,11 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return f"{self.email} ({self.role})"
+
+    @property
+    def full_name(self):
+        """Returns first_name + last_name with a space in between."""
+        return self.get_full_name()
 
     def get_full_name(self):
         """Returns first_name + last_name with a space in between."""

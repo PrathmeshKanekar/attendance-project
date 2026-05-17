@@ -4,6 +4,10 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'core/constants/app_colors.dart';
 import 'core/router/app_router.dart';
+import 'features/virtual_rooms/virtual_rooms_screen.dart';
+import 'features/virtual_rooms/add_edit_room_screen.dart';
+import 'features/virtual_rooms/room_detail_screen.dart';
+import 'features/virtual_rooms/room_preview_screen.dart';
 
 class SmartCampusApp extends ConsumerWidget {
   const SmartCampusApp({super.key});
@@ -11,10 +15,36 @@ class SmartCampusApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(appRouterProvider);
-    return MaterialApp.router(
+    return MaterialApp(
       title: 'Smart Campus ERP',
       debugShowCheckedModeBanner: false,
-      routerConfig: router,
+      // ── HIGH-FIDELITY HYBRID ROUTING (Navigator.pushNamed support) ──
+      routes: {
+        '/virtual-rooms': (context) => VirtualRoomsScreen(),
+        '/virtual-rooms/add': (context) => AddEditRoomScreen(),
+        '/admin/virtual-rooms/add': (context) => AddEditRoomScreen(),
+      },
+      onGenerateRoute: (settings) {
+        final uri = Uri.parse(settings.name ?? '');
+        if (uri.pathSegments.length == 2 && uri.pathSegments[0] == 'virtual-rooms') {
+          return MaterialPageRoute(
+            builder: (context) => RoomDetailScreen(roomId: uri.pathSegments[1]),
+            settings: settings,
+          );
+        }
+        if (uri.pathSegments.length == 3 && uri.pathSegments[0] == 'virtual-rooms' && uri.pathSegments[2] == 'preview') {
+          return MaterialPageRoute(
+            builder: (context) => RoomPreviewScreen(roomId: uri.pathSegments[1]),
+            settings: settings,
+          );
+        }
+        return null;
+      },
+      home: Router(
+        routerDelegate: router.routerDelegate,
+        routeInformationParser: router.routeInformationParser,
+        routeInformationProvider: router.routeInformationProvider,
+      ),
       theme: ThemeData(
         useMaterial3: true,
         fontFamily: GoogleFonts.poppins().fontFamily,

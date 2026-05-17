@@ -6,6 +6,7 @@ import '../../core/constants/app_colors.dart';
 import '../../core/layout/app_layout.dart';
 import '../../core/network/api_client.dart';
 import '../../core/widgets/loading_widget.dart';
+import '../../core/utils/form_validators.dart';
 import 'providers/academic_providers.dart';
 
 class AddUserScreen extends ConsumerStatefulWidget {
@@ -77,9 +78,12 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
       await ref.read(apiClientProvider).post('/api/auth/users/create/', data: data);
 
       if (mounted) {
+        final message = _role == 'principal' 
+            ? 'Principal account created and activated successfully.'
+            : 'User created successfully. Awaiting Principal approval.';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('User created successfully. Awaiting approval.'),
+          SnackBar(
+            content: Text(message),
             backgroundColor: AppColors.success,
           ),
         );
@@ -95,14 +99,7 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
   @override
   Widget build(BuildContext context) {
     final divisionsAsync = ref.watch(divisionsProvider);
-    final principalExistsAsync = ref.watch(principalExistsProvider);
     
-    final rolesNeedingPrincipal = ['teacher', 'hod', 'lab_assistant'];
-    final selectedRoleNeedsPrincipal = rolesNeedingPrincipal.contains(_role);
-    
-    final hasPrincipal = principalExistsAsync.value ?? false;
-    final isCreationBlocked = selectedRoleNeedsPrincipal && !hasPrincipal;
-
     return AppLayout(
       title: 'Add New User',
       child: Stack(
@@ -138,7 +135,7 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
                         child: TextFormField(
                           controller: _firstNameCtrl,
                           decoration: const InputDecoration(labelText: 'First Name *'),
-                          validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                          validator: (v) => FormValidators.minLength(v, 2, 'First name'),
                         ),
                       ),
                       const SizedBox(width: 16),
@@ -146,7 +143,7 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
                         child: TextFormField(
                           controller: _lastNameCtrl,
                           decoration: const InputDecoration(labelText: 'Last Name *'),
-                          validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                          validator: (v) => FormValidators.required(v, 'Last name'),
                         ),
                       ),
                     ],
@@ -155,18 +152,23 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
                   TextFormField(
                     controller: _emailCtrl,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(labelText: 'Email Address *', prefixIcon: Icon(Icons.email_outlined)),
-                    validator: (v) {
-                      if (v == null || v.isEmpty) return 'Required';
-                      if (!v.contains('@')) return 'Invalid email';
-                      return null;
-                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Email Address *',
+                      prefixIcon: Icon(Icons.email_outlined),
+                      hintText: 'e.g. name@college.com',
+                    ),
+                    validator: FormValidators.email,
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _phoneCtrl,
                     keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(labelText: 'Phone Number (Optional)', prefixIcon: Icon(Icons.phone_outlined)),
+                    decoration: const InputDecoration(
+                      labelText: 'Phone Number *',
+                      prefixIcon: Icon(Icons.phone_outlined),
+                      hintText: '10-digit mobile number',
+                    ),
+                    validator: FormValidators.phone,
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
@@ -180,17 +182,17 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
                         onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                       ),
                     ),
-                    validator: (v) => (v == null || v.length < 8) ? 'At least 8 characters' : null,
+                    validator: FormValidators.password,
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _confirmPasswordCtrl,
                     obscureText: _obscurePassword,
-                    decoration: const InputDecoration(labelText: 'Confirm Password *', prefixIcon: Icon(Icons.lock_outline_rounded)),
-                    validator: (v) {
-                      if (v != _passwordCtrl.text) return 'Passwords do not match';
-                      return null;
-                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Confirm Password *', 
+                      prefixIcon: Icon(Icons.lock_outline_rounded),
+                    ),
+                    validator: (v) => FormValidators.confirmPassword(v, _passwordCtrl.text),
                   ),
 
                   // ── Section 2: Role ──────────────────────────────
@@ -209,52 +211,6 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
                     ],
                     onChanged: (v) => setState(() => _role = v!),
                   ),
-
-                  if (selectedRoleNeedsPrincipal) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: hasPrincipal 
-                            ? AppColors.success.withOpacity(0.08)
-                            : Colors.orange.withOpacity(0.08),
-                        border: Border(
-                          left: BorderSide(
-                            color: hasPrincipal ? AppColors.success : Colors.orange, 
-                            width: 4,
-                          ),
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            hasPrincipal ? Icons.check_circle_outline : Icons.warning_amber_rounded,
-                            color: hasPrincipal ? AppColors.success : Colors.orange,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              hasPrincipal 
-                                  ? 'Principal verified. You can proceed with staff creation.'
-                                  : 'A Principal must be approved before you can add Teachers or Staff.',
-                              style: TextStyle(
-                                color: hasPrincipal ? AppColors.success : Colors.orange, 
-                                fontSize: 13, 
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                          if (!hasPrincipal)
-                            IconButton(
-                              icon: const Icon(Icons.refresh, size: 20, color: Colors.orange),
-                              onPressed: () => ref.invalidate(principalExistsProvider),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
 
                   // ── Section 3: Student Details ───────────────────
                   if (_role == 'student') ...[
@@ -300,13 +256,10 @@ class _AddUserScreenState extends ConsumerState<AddUserScreen> {
                     width: double.infinity,
                     height: 54,
                     child: ElevatedButton(
-                      onPressed: (_isLoading || isCreationBlocked) ? null : _submit,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isCreationBlocked ? Colors.grey : AppColors.primary,
-                      ),
+                      onPressed: _isLoading ? null : _submit,
                       child: _isLoading 
                           ? const CircularProgressIndicator(color: Colors.white) 
-                          : Text(isCreationBlocked ? 'Principal Required' : 'Create User'),
+                          : const Text('Create User'),
                     ),
                   ),
                   const SizedBox(height: 40),

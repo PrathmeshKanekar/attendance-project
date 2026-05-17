@@ -5,7 +5,15 @@ import 'app.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // ── GLOBAL ERROR HANDLING ──────────────────────────────────────
+  FlutterError.onError = (details) {
+    print('Flutter Error: ${details.exception}');
+    print('Stack trace: ${details.stack}');
+  };
+
   await Hive.initFlutter();
+  
   runApp(
     const ProviderScope(
       child: SmartCampusApp(),

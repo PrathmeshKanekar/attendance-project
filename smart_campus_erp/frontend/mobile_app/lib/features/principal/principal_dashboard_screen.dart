@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/layout/app_layout.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/network/api_client.dart';
@@ -12,16 +13,13 @@ import '../../core/widgets/empty_state_widget.dart';
 final collegeStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   final api = ref.read(apiClientProvider);
   final usersRes = await api.get('/api/auth/users/');
-  final divRes   = await api.get('/api/divisions/');
   final pendingRes = await api.get('/api/approvals/pending/');
   
   final users   = usersRes.data['users'] as List? ?? [];
-  final divs    = divRes.data as List? ?? [];
   final pending = pendingRes.data['count'] as int? ?? 0;
   
   return {
     'total_users' : users.length,
-    'divisions'   : divs.length,
     'teachers'    : users.where((u) => u['role'] == 'teacher').length,
     'pending'     : pending,
   };
@@ -97,13 +95,6 @@ class PrincipalDashboardScreen extends ConsumerWidget {
                     subtitle: 'Teaching staff',
                   ),
                   StatCard(
-                    label: 'Divisions',
-                    value: '${stats['divisions']}',
-                    icon: Icons.group_work_rounded,
-                    accentColor: AppColors.success,
-                    subtitle: 'Academic units',
-                  ),
-                  StatCard(
                     label: 'Total Campus',
                     value: '${stats['total_users']}',
                     icon: Icons.school_rounded,
@@ -158,14 +149,16 @@ class PrincipalDashboardScreen extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  ElevatedButton(
-                    onPressed: () => Navigator.of(context).pushNamed('/principal/approvals'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.warning,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  Flexible(
+                    child: ElevatedButton(
+                      onPressed: () => context.push('/principal/approvals'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.warning,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text('Review'),
                     ),
-                    child: const Text('Review'),
                   ),
                 ],
               ),

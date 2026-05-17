@@ -27,18 +27,35 @@ def _get_attendance_data(
     start_date   : date,
     end_date     : date,
     college      = None,
+    request_user = None,
 ):
     """
     Core function: compute attendance per student for a
     subject allocation over a date range.
     Returns list of dicts.
     """
+    from django.db.models import Count, Q
+
     try:
         allocation = SubjectAllocation.objects.select_related(
             'subject', 'division', 'teacher', 'college'
         ).get(id=allocation_id)
-    except SubjectAllocation.DoesNotExist:
+    except (SubjectAllocation.DoesNotExist, ValueError):
         return None, 'Subject allocation not found.'
+
+    # ROLE PERMISSION CHECK
+    if request_user:
+        if request_user.role == 'teacher' and allocation.teacher != request_user:
+            return None, 'Access denied: You can only view your own allocations.'
+        if request_user.role == 'hod':
+            # Check if HOD belongs to the same department as the subject
+            if not SubjectAllocation.objects.filter(
+                id=allocation_id,
+                subject__department__hod=request_user
+            ).exists():
+                return None, 'Access denied: Subject is outside your department.'
+        if request_user.role == 'principal' and request_user.college != allocation.college:
+            return None, 'Access denied: Cross-college report access blocked.'
 
     if college and allocation.college != college:
         return None, 'Access denied.'
@@ -51,29 +68,34 @@ def _get_attendance_data(
     )
     total_sessions = sessions.count()
 
+    # Optimization: Use annotation to get counts in one query
     enrollments = StudentSubjectEnrollment.objects.select_related(
         'student__user',
     ).filter(
         subject_allocation = allocation,
         is_active          = True,
+    ).annotate(
+        present_count=Count(
+            'student__user__attendance_logs',
+            filter=Q(
+                student__user__attendance_logs__session__in=sessions,
+                student__user__attendance_logs__status='present'
+            )
+        ),
+        manual_count=Count(
+            'student__user__attendance_logs',
+            filter=Q(
+                student__user__attendance_logs__session__in=sessions,
+                student__user__attendance_logs__status='manual'
+            )
+        )
     )
 
     result = []
     for enroll in enrollments:
-        student  = enroll.student
-        present  = AttendanceLog.objects.filter(
-            session__in = sessions,
-            student     = student.user,
-            status      = 'present',
-        ).count()
-        manual   = AttendanceLog.objects.filter(
-            session__in = sessions,
-            student     = student.user,
-            status      = 'manual',
-        ).count()
-        # Count manual as present
-        present_total = present + manual
-        absent        = total_sessions - present_total
+        student       = enroll.student
+        present_total = enroll.present_count + enroll.manual_count
+        absent        = max(0, total_sessions - present_total)
         percentage    = (
             round(present_total / total_sessions * 100, 1)
             if total_sessions > 0 else 0.0
@@ -85,12 +107,12 @@ def _get_attendance_data(
             'student_id'    : str(student.id),
             'total_sessions': total_sessions,
             'present'       : present_total,
-            'absent'        : max(0, absent),
+            'absent'        : absent,
             'percentage'    : percentage,
             'is_at_risk'    : percentage < 75,
         })
 
-    result.sort(key=lambda x: x['roll_number'])
+    result.sort(key=lambda x: x['roll_number'] if x['roll_number'] else '0')
     return result, allocation
 
 
@@ -134,11 +156,11 @@ class AttendanceSummaryView(APIView):
         )
 
         data, allocation = _get_attendance_data(
-            alloc_id, start, end, college
+            alloc_id, start, end, college, request_user=request.user
         )
 
         if data is None:
-            return Response({'error': allocation}, status=404)
+            return Response({'error': allocation}, status=status.HTTP_403_FORBIDDEN if 'denied' in str(allocation) else status.HTTP_404_NOT_FOUND)
 
         below_threshold = [r for r in data if r['is_at_risk']]
         avg_pct = (
@@ -203,10 +225,10 @@ class DefaultersView(APIView):
 
         if alloc_id:
             data, allocation = _get_attendance_data(
-                alloc_id, start, end, college
+                alloc_id, start, end, college, request_user=request.user
             )
             if data is None:
-                return Response({'error': allocation}, status=404)
+                return Response({'error': allocation}, status=status.HTTP_403_FORBIDDEN if 'denied' in str(allocation) else status.HTTP_404_NOT_FOUND)
 
             defaulters = [r for r in data if r['percentage'] < threshold]
             return Response({
@@ -228,7 +250,7 @@ class DefaultersView(APIView):
             all_defaulters = []
             for alloc in qs:
                 data, _ = _get_attendance_data(
-                    str(alloc.id), start, end, college
+                    str(alloc.id), start, end, college, request_user=request.user
                 )
                 if data:
                     for r in data:
@@ -251,7 +273,7 @@ class DefaultersView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class DownloadPDFView(APIView):
-    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsStudent | IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         alloc_id  = request.query_params.get('allocation_id')
@@ -282,11 +304,16 @@ class DownloadPDFView(APIView):
             if request.user.role != 'super_admin' else None
         )
 
+        if request.user.role == 'student':
+            if alloc_id:
+                if not StudentSubjectEnrollment.objects.filter(student__user=request.user, subject_allocation_id=alloc_id).exists():
+                    return Response({'error': 'You are not enrolled in this subject.'}, status=403)
+
         data, allocation = _get_attendance_data(
-            alloc_id, start, end, college
+            alloc_id, start, end, college, request_user=request.user
         )
         if data is None:
-            return Response({'error': allocation}, status=404)
+            return Response({'error': allocation}, status=status.HTTP_403_FORBIDDEN if 'denied' in str(allocation) else status.HTTP_404_NOT_FOUND)
 
         college_name = (
             request.user.college.name
@@ -329,7 +356,7 @@ class DownloadPDFView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class DownloadExcelView(APIView):
-    permission_classes = [IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsStudent | IsTeacher | IsCollegeScopedStaff | IsSuperAdmin]
 
     def get(self, request):
         alloc_id  = request.query_params.get('allocation_id')
@@ -360,11 +387,16 @@ class DownloadExcelView(APIView):
             if request.user.role != 'super_admin' else None
         )
 
+        if request.user.role == 'student':
+            if alloc_id:
+                if not StudentSubjectEnrollment.objects.filter(student__user=request.user, subject_allocation_id=alloc_id).exists():
+                    return Response({'error': 'You are not enrolled in this subject.'}, status=403)
+
         data, allocation = _get_attendance_data(
-            alloc_id, start, end, college
+            alloc_id, start, end, college, request_user=request.user
         )
         if data is None:
-            return Response({'error': allocation}, status=404)
+            return Response({'error': allocation}, status=status.HTTP_403_FORBIDDEN if 'denied' in str(allocation) else status.HTTP_404_NOT_FOUND)
 
         college_name = (
             request.user.college.name
@@ -412,6 +444,9 @@ class StudentMyAttendanceView(APIView):
     permission_classes = [IsStudent]
 
     def get(self, request):
+        from django.db.models import Count, Q, OuterRef, Subquery
+
+        # First, let's get all ended sessions for each allocation the student is enrolled in
         enrollments = StudentSubjectEnrollment.objects.select_related(
             'subject_allocation__subject',
             'subject_allocation__teacher',
@@ -424,21 +459,26 @@ class StudentMyAttendanceView(APIView):
 
         result = []
         for enroll in enrollments:
-            allocation    = enroll.subject_allocation
-            sessions      = AttendanceSession.objects.filter(
-                subject_allocation = allocation,
-                status             = 'ended',
-            )
-            total   = sessions.count()
-            present = AttendanceLog.objects.filter(
-                session__in = sessions,
-                student     = request.user,
-                status__in  = ['present', 'manual'],
+            allocation = enroll.subject_allocation
+            
+            # Count total ended sessions for this allocation
+            total_sessions = AttendanceSession.objects.filter(
+                subject_allocation=allocation,
+                status='ended'
             ).count()
-            absent     = max(0, total - present)
+
+            # Count present/manual logs for this student in those sessions
+            present_count = AttendanceLog.objects.filter(
+                session__subject_allocation=allocation,
+                session__status='ended',
+                student=request.user,
+                status__in=['present', 'manual']
+            ).count()
+
+            absent = max(0, total_sessions - present_count)
             percentage = (
-                round(present / total * 100, 1)
-                if total > 0 else 0.0
+                round(present_count / total_sessions * 100, 1)
+                if total_sessions > 0 else 0.0
             )
 
             result.append({
@@ -448,8 +488,8 @@ class StudentMyAttendanceView(APIView):
                 'teacher_name'   : allocation.teacher.get_full_name(),
                 'division_name'  : allocation.division.name,
                 'year_of_study'  : allocation.division.year_of_study,
-                'total_sessions' : total,
-                'present'        : present,
+                'total_sessions' : total_sessions,
+                'present'        : present_count,
                 'absent'         : absent,
                 'percentage'     : percentage,
                 'is_at_risk'     : percentage < 75,
@@ -541,7 +581,7 @@ class CollegeOverviewView(APIView):
 
         for alloc in qs.select_related('subject', 'division'):
             data, _ = _get_attendance_data(
-                str(alloc.id), start, end, college
+                str(alloc.id), start, end, college, request_user=request.user
             )
             if not data:
                 continue

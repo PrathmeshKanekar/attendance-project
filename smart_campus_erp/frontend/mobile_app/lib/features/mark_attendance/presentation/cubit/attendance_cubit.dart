@@ -134,6 +134,7 @@ class AttendanceCubit extends Cubit<AttendanceState> {
               reason = 'You are ${boundary.toStringAsFixed(1)}m outside the '
                        '${radius.toStringAsFixed(0)}m classroom boundary.';
             }
+            emit(state.copyWith(isInsideRoom: false)); // Ensure state is synchronized Task 2
             _failStep(AttendanceStep.gpsValidation, reason);
           }
         },

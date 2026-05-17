@@ -32,13 +32,27 @@ class FaceRegisterInputSerializer(serializers.Serializer):
     face_image_b64 = serializers.CharField()
 
     def validate_face_image_b64(self, value):
-        if not value or len(value) < 100:
+        if not value or len(value) < 1000:
             raise serializers.ValidationError(
-                'face_image_b64 is too short. Provide a valid base64 image.'
+                'Invalid face image. Please provide a clear, high-resolution photo.'
             )
+        
+        # Check for base64 encoding
+        val = value.split(',')[1] if ',' in value else value
+        import base64
+        try:
+            base64.b64decode(val[:100], validate=True)
+        except Exception:
+            raise serializers.ValidationError('Invalid face image data.')
+            
         return value
 
 
 class FaceVerifyInputSerializer(serializers.Serializer):
     student_id    = serializers.UUIDField(required=False)
     face_image_b64 = serializers.CharField()
+
+    def validate_face_image_b64(self, value):
+        if not value or len(value) < 1000:
+            raise serializers.ValidationError('Face image data is insufficient.')
+        return value

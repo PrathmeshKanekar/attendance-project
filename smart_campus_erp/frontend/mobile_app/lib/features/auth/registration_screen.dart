@@ -6,7 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:camera/camera.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/network/api_client.dart';
+import '../../core/config/api_config.dart';
+import '../../core/network/dio_client.dart';
 import '../../core/widgets/stat_card.dart';
 
 class RegistrationScreen extends ConsumerStatefulWidget {
@@ -44,8 +45,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
   Future<void> _loadInitialData() async {
     try {
-      final api = ref.read(apiClientProvider);
-      final collRes = await api.get('/api/tenants/colleges/');
+      final api = ref.read(dioClientProvider);
+      final collRes = await api.get(ApiConfig.colleges);
 
       setState(() {
         if (collRes.data is Map && collRes.data['colleges'] != null) {
@@ -55,8 +56,12 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
       });
     } catch (e) {
       if (mounted) {
+        String msg = e.toString();
+        if (msg.contains('SocketException') || msg.contains('connection error')) {
+          msg = 'Backend unreachable. Please check your server IP in settings.';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading colleges: $e')),
+          SnackBar(content: Text('Error: $msg'), backgroundColor: AppColors.danger),
         );
       }
       setState(() => _isLoadingData = false);
@@ -70,9 +75,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     });
     
     try {
-      final api = ref.read(apiClientProvider);
+      final api = ref.read(dioClientProvider);
       // We pass college_id to filter divisions publicly
-      final divRes = await api.get('/api/academic/divisions/', params: {
+      final divRes = await api.get(ApiConfig.divisions, params: {
         'college_id': collegeId,
       });
 
@@ -127,8 +132,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
       final bytes = await _faceImage!.readAsBytes();
       final base64Image = base64Encode(bytes);
 
-      final api = ref.read(apiClientProvider);
-      final res = await api.post('/api/students/register/', data: {
+      final api = ref.read(dioClientProvider);
+      final res = await api.post(ApiConfig.studentsRegister, data: {
         'email': _emailCtrl.text.trim(),
         'password': _pwdCtrl.text,
         'first_name': _fNameCtrl.text.trim(),

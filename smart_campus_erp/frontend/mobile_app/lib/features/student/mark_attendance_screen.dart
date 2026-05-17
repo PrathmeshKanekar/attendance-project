@@ -4,7 +4,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/constants/app_colors.dart';
-import '../../core/network/api_client.dart';
+import '../../core/config/api_config.dart';
+import '../../core/network/dio_client.dart';
 
 // ── Geo check state ────────────────────────────────────────
 abstract class GeoState {}
@@ -111,9 +112,9 @@ class _MarkAttendanceScreenState
       _currentAlt = pos.altitude;
 
       // ── Ask backend if inside room ─────────────────
-      final api = ref.read(apiClientProvider);
+      final api = ref.read(dioClientProvider);
       final res = await api.post(
-        '/api/attendance/check-location/',
+        ApiConfig.checkLocation,
         data: {
           'session_id': widget.session['id'],
           'lat'       : pos.latitude,

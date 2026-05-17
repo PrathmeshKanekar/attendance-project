@@ -8,6 +8,7 @@ if not ENABLE_GIS:
 DATABASES = {
     'default': env.db_url_config(db_url)
 }
+DATABASES['default']['ENGINE'] = 'django.contrib.gis.db.backends.postgis'
 
 
 # Celery

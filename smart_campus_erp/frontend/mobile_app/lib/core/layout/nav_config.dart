@@ -44,6 +44,11 @@ class NavConfig {
             route : '/admin/dashboard',
           ),
           NavItem(
+            label : 'Academic Years',
+            icon  : Icons.calendar_today_rounded,
+            route : '/admin/academic-years',
+          ),
+          NavItem(
             label : 'Departments',
             icon  : Icons.apartment_rounded,
             route : '/admin/departments',
@@ -53,6 +58,11 @@ class NavConfig {
             icon  : Icons.school_rounded,
             route : '/admin/courses',
           ),
+          NavItem(
+            label : 'Add Users',
+            icon  : Icons.person_add_rounded,
+            route : '/admin/users/add',
+          ),
         ];
 
       case 'lab_assistant':
@@ -61,11 +71,6 @@ class NavConfig {
             label : 'Dashboard',
             icon  : Icons.dashboard_rounded,
             route : '/admin/dashboard',
-          ),
-          NavItem(
-            label : 'Academic Years',
-            icon  : Icons.calendar_today_rounded,
-            route : '/admin/academic-years',
           ),
           NavItem(
             label : 'Virtual Rooms',
@@ -78,6 +83,11 @@ class NavConfig {
             route : '/admin/subjects',
           ),
           NavItem(
+            label : 'Divisions',
+            icon  : Icons.groups_rounded,
+            route : '/admin/divisions',
+          ),
+          NavItem(
             label : 'Allocations',
             icon  : Icons.assignment_rounded,
             route : '/admin/allocations',
@@ -86,6 +96,11 @@ class NavConfig {
             label : 'Enrollments',
             icon  : Icons.how_to_reg_rounded,
             route : '/admin/enrollments',
+          ),
+          NavItem(
+            label : 'Face Register',
+            icon  : Icons.face_retouching_natural_rounded,
+            route : '/admin/face-register',
           ),
         ];
 

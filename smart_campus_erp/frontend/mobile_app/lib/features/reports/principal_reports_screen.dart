@@ -1,28 +1,98 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/layout/app_layout.dart';
+import '../../core/network/api_client.dart';
 import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/loading_widget.dart';
 import '../../core/widgets/empty_state_widget.dart';
 import '../../core/widgets/stat_card.dart';
 import 'report_providers.dart';
 
-class PrincipalReportsScreen extends ConsumerWidget {
+class PrincipalReportsScreen extends ConsumerStatefulWidget {
   const PrincipalReportsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PrincipalReportsScreen> createState() => _PrincipalReportsScreenState();
+}
+
+class _PrincipalReportsScreenState extends ConsumerState<PrincipalReportsScreen> {
+  bool _isDownloading = false;
+
+  Future<void> _downloadFile(String type, String allocId, String subjectName) async {
+    setState(() => _isDownloading = true);
+
+    try {
+      final api = ref.read(apiClientProvider);
+      final endpoint = type == 'pdf' ? '/api/reports/download/pdf/' : '/api/reports/download/excel/';
+      final queryParams = {
+        'allocation_id': allocId,
+        'start_date'   : DateFormat('yyyy-MM-dd').format(DateTime.now().subtract(const Duration(days: 90))),
+        'end_date'     : DateFormat('yyyy-MM-dd').format(DateTime.now()),
+      };
+
+      Directory? dir;
+      if (Platform.isAndroid) {
+        dir = Directory('/storage/emulated/0/Download');
+        if (!await dir.exists()) dir = await getExternalStorageDirectory();
+      } else {
+        dir = await getApplicationDocumentsDirectory();
+      }
+
+      final extension = type == 'pdf' ? 'pdf' : 'xlsx';
+      final fileName = 'college_report_${subjectName.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.$extension';
+      final savePath = '${dir!.path}/$fileName';
+
+      await api.download(
+        endpoint,
+        savePath,
+        queryParameters: queryParams,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${type.toUpperCase()} downloaded successfully'),
+            action: SnackBarAction(
+              label: 'Open',
+              onPressed: () => OpenFilex.open(savePath),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download failed: $e'), backgroundColor: AppColors.danger),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final overviewAsync = ref.watch(collegeOverviewProvider);
 
     return AppLayout(
       title: 'College Analytics',
       actions: [
-        IconButton(
-          icon: const Icon(Icons.refresh_rounded),
-          onPressed: () => ref.invalidate(collegeOverviewProvider),
-        ),
+        if (_isDownloading)
+          const Center(child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+          ))
+        else
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: () => ref.invalidate(collegeOverviewProvider),
+          ),
       ],
       child: overviewAsync.when(
         loading: () => const LoadingWidget(message: 'Loading college analytics...'),
@@ -91,7 +161,10 @@ class PrincipalReportsScreen extends ConsumerWidget {
                 const SizedBox(height: 16),
 
                 // ── Subject List ─────────────────────────────
-                ...subjects.map((s) => _SubjectOverviewCard(subject: s)),
+                ...subjects.map((s) => _SubjectOverviewCard(
+                  subject: s,
+                  onDownload: (type) => _downloadFile(type, s['allocation_id'], s['subject_name']),
+                )),
               ],
             ),
           );
@@ -103,7 +176,8 @@ class PrincipalReportsScreen extends ConsumerWidget {
 
 class _SubjectOverviewCard extends StatelessWidget {
   final Map<String, dynamic> subject;
-  const _SubjectOverviewCard({required this.subject});
+  final Function(String type) onDownload;
+  const _SubjectOverviewCard({required this.subject, required this.onDownload});
 
   @override
   Widget build(BuildContext context) {
@@ -183,6 +257,23 @@ class _SubjectOverviewCard extends StatelessWidget {
               color: color,
               minHeight: 6,
             ),
+          ),
+          const Divider(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                onPressed: () => onDownload('pdf'),
+                icon: const Icon(Icons.picture_as_pdf_outlined, size: 18, color: AppColors.danger),
+                label: const Text('PDF', style: TextStyle(fontSize: 12, color: AppColors.danger)),
+              ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                onPressed: () => onDownload('excel'),
+                icon: const Icon(Icons.table_view_outlined, size: 18, color: AppColors.success),
+                label: const Text('Excel', style: TextStyle(fontSize: 12, color: AppColors.success)),
+              ),
+            ],
           ),
         ],
       ),

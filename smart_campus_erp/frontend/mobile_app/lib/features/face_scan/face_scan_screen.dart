@@ -142,16 +142,6 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
       // On iOS, it's usually BGRA_8888 (raw 1111970369)
       final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.yuv420;
 
-      final planeData = image.planes.map(
-        (Plane plane) {
-          return InputImagePlaneMetadata(
-            bytesPerRow: plane.bytesPerRow,
-            height: plane.height,
-            width: plane.width,
-          );
-        },
-      ).toList();
-
       final inputImageData = InputImageMetadata(
         size: imageSize,
         rotation: imageRotation,

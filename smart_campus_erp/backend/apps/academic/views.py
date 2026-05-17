@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.permissions import (
     IsCollegeScopedStaff, IsSuperAdmin, IsLabAssistant, IsCollegeAdmin,
+    IsPrincipal,
 )
 from .models import (
     Department, Course, AcademicYear,
@@ -33,7 +34,7 @@ def college_scope(user, qs, field='college'):
 # ══════════════════════════════════════════════════════════
 
 class DepartmentListCreateView(APIView):
-    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         qs = college_scope(
@@ -47,6 +48,9 @@ class DepartmentListCreateView(APIView):
         return Response(DepartmentSerializer(qs, many=True).data)
 
     def post(self, request):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can create departments.'}, status=status.HTTP_403_FORBIDDEN)
+        
         data = request.data.copy()
         if request.user.role != 'super_admin':
             data['college'] = str(request.user.college.id)
@@ -77,7 +81,7 @@ class DepartmentListCreateView(APIView):
 
 
 class DepartmentDetailView(APIView):
-    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsAuthenticated]
 
     def _get_dept(self, request, pk):
         try:
@@ -96,6 +100,9 @@ class DepartmentDetailView(APIView):
         return Response(DepartmentSerializer(dept).data)
 
     def put(self, request, pk):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can edit departments.'}, status=status.HTTP_403_FORBIDDEN)
+        
         dept = self._get_dept(request, pk)
         if not dept:
             return Response({'error': 'Not found'}, status=404)
@@ -106,6 +113,9 @@ class DepartmentDetailView(APIView):
         return Response(ser.errors, status=400)
 
     def delete(self, request, pk):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can deactivate departments.'}, status=status.HTTP_403_FORBIDDEN)
+            
         dept = self._get_dept(request, pk)
         if not dept:
             return Response({'error': 'Not found'}, status=404)
@@ -122,7 +132,7 @@ class DepartmentDetailView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class CourseListCreateView(APIView):
-    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         qs = college_scope(
@@ -135,6 +145,9 @@ class CourseListCreateView(APIView):
         return Response(CourseSerializer(qs.order_by('name'), many=True).data)
 
     def post(self, request):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can create courses.'}, status=status.HTTP_403_FORBIDDEN)
+            
         college = (request.user.college
                    if request.user.role != 'super_admin'
                    else None)
@@ -167,7 +180,7 @@ class CourseListCreateView(APIView):
 
 
 class CourseDetailView(APIView):
-    permission_classes = [IsCollegeAdmin | IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsAuthenticated]
 
     def _get(self, request, pk):
         try:
@@ -185,6 +198,9 @@ class CourseDetailView(APIView):
         return Response(CourseSerializer(c).data)
 
     def put(self, request, pk):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can edit courses.'}, status=status.HTTP_403_FORBIDDEN)
+            
         c = self._get(request, pk)
         if not c:
             return Response({'error': 'Not found'}, status=404)
@@ -204,6 +220,9 @@ class CourseDetailView(APIView):
         return Response(ser.errors, status=400)
 
     def delete(self, request, pk):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can deactivate courses.'}, status=status.HTTP_403_FORBIDDEN)
+            
         c = self._get(request, pk)
         if not c:
             return Response({'error': 'Not found'}, status=404)
@@ -213,11 +232,11 @@ class CourseDetailView(APIView):
 
 
 # ══════════════════════════════════════════════════════════
-# ACADEMIC YEARS (Managed ONLY by Lab Assistant)
+# ACADEMIC YEARS (Managed ONLY by College Admin)
 # ══════════════════════════════════════════════════════════
 
 class AcademicYearListCreateView(APIView):
-    permission_classes = [IsLabAssistant]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         qs = college_scope(
@@ -227,6 +246,8 @@ class AcademicYearListCreateView(APIView):
         return Response(AcademicYearSerializer(qs, many=True).data)
 
     def post(self, request):
+        if request.user.role not in ['college_admin', 'super_admin']:
+            return Response({'error': 'Only Administrators can create academic years.'}, status=status.HTTP_403_FORBIDDEN)
         ser = AcademicYearSerializer(data=request.data)
         if ser.is_valid():
             college = request.user.college
@@ -245,7 +266,7 @@ class AcademicYearListCreateView(APIView):
         return Response(ser.errors, status=400)
 
 class AcademicYearDetailView(APIView):
-    permission_classes = [IsLabAssistant]
+    permission_classes = [IsCollegeAdmin | IsSuperAdmin]
 
     def _get(self, request, pk):
         try:
@@ -277,7 +298,7 @@ class AcademicYearDetailView(APIView):
         return Response({'success': True})
 
 class SetCurrentAcademicYearView(APIView):
-    permission_classes = [IsLabAssistant]
+    permission_classes = [IsCollegeAdmin | IsSuperAdmin]
 
     def post(self, request, pk):
         try:
@@ -302,8 +323,8 @@ class SetCurrentAcademicYearView(APIView):
 class DivisionListCreateView(APIView):
     def get_permissions(self):
         if self.request.method == 'GET':
-            return []
-        return [IsAuthenticated(), (IsCollegeScopedStaff | IsSuperAdmin)()]
+            return [] # AllowAny for registration flow
+        return [IsLabAssistant()]
 
     def get(self, request):
         college_id = request.query_params.get('college_id')
@@ -357,7 +378,7 @@ class DivisionListCreateView(APIView):
 
 
 class DivisionDetailView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsLabAssistant]
 
     def _get(self, request, pk):
         try:

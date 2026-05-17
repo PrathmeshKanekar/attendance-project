@@ -1,0 +1,73 @@
+academic
+ [X] 0001_initial
+ [X] 0002_initial
+accounts
+ [X] 0001_initial
+admin
+ [X] 0001_initial
+ [X] 0002_logentry_remove_auto_add
+ [X] 0003_logentry_add_action_flag_choices
+approvals
+ [X] 0001_initial
+attendance
+ [X] 0001_initial
+ [ ] 0002_rename_lat_attendancesession_teacher_lat_and_more
+audit
+ [ ] 0001_initial
+auth
+ [X] 0001_initial
+ [X] 0002_alter_permission_name_max_length
+ [X] 0003_alter_user_email_max_length
+ [X] 0004_alter_user_username_opts
+ [X] 0005_alter_user_last_login_null
+ [X] 0006_require_contenttypes_0002
+ [X] 0007_alter_validators_add_error_messages
+ [X] 0008_alter_user_username_max_length
+ [X] 0009_alter_user_last_name_max_length
+ [X] 0010_alter_group_name_max_length
+ [X] 0011_update_proxy_permissions
+ [X] 0012_alter_user_first_name_max_length
+contenttypes
+ [X] 0001_initial
+ [X] 0002_remove_content_type_name
+face_recognition
+ [ ] 0001_initial
+notifications
+ [ ] 0001_initial
+otp_email
+ [ ] 0001_initial
+ [ ] 0002_sidechanneldevice_email
+ [ ] 0003_emaildevice_email
+ [ ] 0004_throttling
+ [ ] 0005_emaildevice_last_generated_timestamp
+otp_totp
+ [ ] 0001_initial
+ [ ] 0002_auto_20190420_0723
+reports
+ [ ] 0001_initial
+sessions
+ [ ] 0001_initial
+staff
+ [ ] 0001_initial
+students
+ [ ] 0001_initial
+tenants
+ [X] 0001_initial
+ [ ] 0002_alter_college_logo_url
+token_blacklist
+ [ ] 0001_initial
+ [ ] 0002_outstandingtoken_jti_hex
+ [ ] 0003_auto_20171017_2007
+ [ ] 0004_auto_20171017_2013
+ [ ] 0005_remove_outstandingtoken_jti
+ [ ] 0006_auto_20171017_2113
+ [ ] 0007_auto_20171017_2214
+ [ ] 0008_migrate_to_bigautofield
+ [ ] 0010_fix_migrate_to_bigautofield
+ [ ] 0011_linearizes_history
+ [ ] 0012_alter_outstandingtoken_user
+virtual_rooms
+ [X] 0001_initial
+ [ ] 0002_add_polygon_3d_boundary
+ [ ] 0003_alter_virtualroom_options_and_more
+ [ ] 0004_spatialmetadata_alter_virtualroom_options_and_more

@@ -20,7 +20,7 @@ from .serializers import (
 )
 from .permissions import (
     IsCollegeScopedStaff, IsSuperAdmin,
-    IsPrincipal, IsCollegeAdmin,
+    IsPrincipal, IsCollegeAdmin, IsPrincipalOnly,
 )
 
 User = get_user_model()
@@ -58,7 +58,7 @@ class EmailLoginView(APIView):
             )
 
         try:
-            user = User.objects.select_related('college').get(email=email)
+            user = User.objects.select_related('college', 'student_profile').get(email=email)
         except User.DoesNotExist:
             return Response(
                 {'error': 'No account found with this email address.'},
@@ -241,7 +241,7 @@ class RegisterDeviceView(APIView):
 # POST /api/users/   — Create user
 # ─────────────────────────────────────────────
 class CreateUserView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeScopedStaff | IsCollegeAdmin | IsSuperAdmin]
 
     def post(self, request):
         serializer = CreateUserSerializer(data=request.data)
@@ -256,40 +256,20 @@ class CreateUserView(APIView):
             else None
         )
 
-        # Requirements: Principal and College Admin become active immediately.
-        # Others (teacher, staff, lab) stay inactive/pending.
+        # Requirements: Principal, College Admin and Student become active immediately.
+        # Others (teacher, staff, hod) stay pending and require Principal approval.
         is_active = False
         is_approved = False
 
-        if role in ['principal', 'college_admin', 'super_admin']:
+        if role in ['principal', 'college_admin', 'super_admin', 'student']:
             is_active = True
             is_approved = True
 
-        ROLES_NEEDING_PRINCIPAL = [
-            'teacher', 'hod', 'lab_assistant',
-        ]
-        if role in ROLES_NEEDING_PRINCIPAL:
-            if college is None:
-                return Response(
-                    {'error': 'College is required.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            principal_exists = User.objects.filter(
-                college=college,
-                role='principal',
-                is_approved=True,
-                is_active=True,
-            ).exists()
-            if not principal_exists:
-                return Response(
-                    {
-                        'error': (
-                            'A Principal must be created and approved '
-                            'before you can add teachers or staff.'
-                        )
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+        if college is None and role != 'super_admin':
+            return Response(
+                {'error': 'College is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         user = User.objects.create_user(
             email      = data['email'],
@@ -342,8 +322,9 @@ class CreateUserView(APIView):
                 year_of_study = year_of_study,
             )
 
-        # Create approval request only for roles that need it (not Principal)
-        if college and role != 'principal':
+        # Create approval request only for roles that need it (Teacher and Staff)
+        ROLES_NEEDING_APPROVAL = ['teacher', 'staff', 'hod', 'lab_assistant']
+        if college and role in ROLES_NEEDING_APPROVAL:
             ApprovalRequest.objects.create(
                 college        = college,
                 user           = user,
@@ -351,7 +332,7 @@ class CreateUserView(APIView):
                 status         = 'pending',
             )
 
-            # Notifications for Principal (only role who can approve now)
+            # Notifications for Principal
             principals_qs = User.objects.filter(
                 college=college,
                 role='principal',
@@ -391,7 +372,7 @@ class CreateUserView(APIView):
 # GET /api/users/  — List users
 # ─────────────────────────────────────────────
 class ListUsersView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeScopedStaff | IsCollegeAdmin | IsSuperAdmin]
 
     def get(self, request):
         user = request.user
@@ -431,7 +412,7 @@ class ListUsersView(APIView):
 # ─────────────────────────────────────────────
 class ApproveUserView(APIView):
     # ONLY Principal can approve
-    permission_classes = [IsPrincipal]
+    permission_classes = [IsPrincipalOnly]
 
     def post(self, request, user_id):
         try:
@@ -489,7 +470,7 @@ class ApproveUserView(APIView):
 # ─────────────────────────────────────────────
 class RejectUserView(APIView):
     # ONLY Principal can reject
-    permission_classes = [IsPrincipal]
+    permission_classes = [IsPrincipalOnly]
 
     def post(self, request, user_id):
         reason = request.data.get('reason', '').strip()
@@ -547,7 +528,7 @@ class RejectUserView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class UserDetailView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeScopedStaff | IsCollegeAdmin | IsSuperAdmin]
 
     def _get_user(self, request, user_id):
         try:
@@ -637,7 +618,7 @@ class UserDetailView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class DeactivateUserView(APIView):
-    permission_classes = [IsCollegeScopedStaff | IsSuperAdmin]
+    permission_classes = [IsCollegeScopedStaff | IsCollegeAdmin | IsSuperAdmin]
 
     def post(self, request, user_id):
         try:
@@ -692,7 +673,7 @@ class PendingApprovalsView(APIView):
     Returns all pending users for the approver's college.
     ONLY Principal can access.
     """
-    permission_classes = [IsPrincipal]
+    permission_classes = [IsPrincipalOnly]
 
     def get(self, request):
         # ONLY: teacher, lab assistant, hod should require approval.

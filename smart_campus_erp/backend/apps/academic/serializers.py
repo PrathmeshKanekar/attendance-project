@@ -17,13 +17,26 @@ class DepartmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    def _sanitize(self, value):
+        import re
+        return re.sub(r'\s+', ' ', value).strip()
+
+    def validate_name(self, value):
+        val = self._sanitize(value)
+        if len(val) < 3:
+            raise serializers.ValidationError('Name must be at least 3 characters.')
+        return val
+
+    def validate_code(self, value):
+        val = self._sanitize(value).upper()
+        if not val.isalnum():
+            raise serializers.ValidationError('Code must be alphanumeric.')
+        return val
+
     def get_hod_name(self, obj):
         if obj.hod:
             return f'{obj.hod.first_name} {obj.hod.last_name}'
         return None
-
-    def validate_code(self, value):
-        return value.strip().upper()
 
 
 class CourseSerializer(serializers.ModelSerializer):
@@ -39,8 +52,18 @@ class CourseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    def validate_name(self, value):
+        if len(value.strip()) < 3:
+            raise serializers.ValidationError('Name is too short.')
+        return value.strip()
+
     def validate_code(self, value):
         return value.strip().upper()
+
+    def validate_duration_years(self, value):
+        if not (1 <= value <= 6):
+            raise serializers.ValidationError('Duration must be between 1 and 6 years.')
+        return value
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
@@ -51,6 +74,28 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             'is_current', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_name(self, value):
+        # Format: 2024-2025
+        import re
+        if not re.match(r'^\d{4}-\d{4}$', value):
+            raise serializers.ValidationError('Format must be YYYY-YYYY.')
+        return value
+
+    def validate(self, data):
+        if data['start_date'] >= data['end_date']:
+            raise serializers.ValidationError({
+                "end_date": "End date must be after start date."
+            })
+        
+        # Duration should be around 1 year
+        delta = data['end_date'] - data['start_date']
+        if delta.days < 180:
+            raise serializers.ValidationError("Academic year duration is too short (min 6 months).")
+        if delta.days > 400:
+            raise serializers.ValidationError("Academic year duration is too long (max 13 months).")
+            
+        return data
 
 
 class DivisionSerializer(serializers.ModelSerializer):
@@ -70,6 +115,11 @@ class DivisionSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_capacity(self, value):
+        if not (1 <= value <= 200):
+            raise serializers.ValidationError('Capacity must be between 1 and 200.')
+        return value
 
     def get_coordinator_name(self, obj):
         if obj.class_coordinator:
@@ -95,6 +145,21 @@ class SubjectSerializer(serializers.ModelSerializer):
             'credits', 'is_lab', 'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_year_of_study(self, value):
+        if not (1 <= value <= 6):
+            raise serializers.ValidationError('Invalid year of study.')
+        return value
+
+    def validate_semester(self, value):
+        if not (1 <= value <= 12):
+            raise serializers.ValidationError('Invalid semester.')
+        return value
+
+    def validate_credits(self, value):
+        if not (0 <= value <= 10):
+            raise serializers.ValidationError('Credits must be between 0 and 10.')
+        return value
 
     def validate_code(self, value):
         return value.strip().upper()

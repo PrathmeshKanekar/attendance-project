@@ -47,14 +47,23 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   }
 
   void _checkAndNavigate(AuthState state) {
+    print('SplashScreen: Checking navigation. TimerDone: $_timerDone, Navigated: $_navigated, State: ${state.runtimeType}');
+    
     if (!_timerDone || _navigated) return;
 
     if (state is AuthSuccess) {
+      print('SplashScreen: Success state. Navigating to Dashboard.');
       _navigated = true;
       _navigate(state.user);
     } else if (state is AuthUnauthenticated || state is AuthError) {
+      print('SplashScreen: Unauthenticated/Error state. Navigating to Login.');
       _navigated = true;
       context.go('/login');
+    } else {
+      // If we are still in AuthInitial/Loading but the timer is done, 
+      // we don't want to wait forever. However, AuthInitial should transition 
+      // quickly. If it's still stuck after 5 seconds (total), we force login.
+      print('SplashScreen: Still in ${state.runtimeType}. Waiting for provider...');
     }
   }
 

@@ -1,9 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../config/api_config.dart';
 import '../constants/app_constants.dart';
 import '../models/user_model.dart';
-import '../network/api_client.dart';
+import '../network/dio_client.dart';
 import '../services/secure_storage_service.dart';
 
 abstract class AuthState {}
@@ -20,41 +21,53 @@ class AuthError         extends AuthState {
 class AuthUnauthenticated extends AuthState {}
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  final ApiClient              _api;
+  final DioClient              _api;
   final FlutterSecureStorage   _storage;
 
   AuthNotifier(this._api, this._storage) : super(AuthInitial()) {
-    // CRITICAL FIX: auto-restore session on creation
     _restoreOnInit();
   }
 
-  // Called automatically when notifier is created
-  // Restores user from secure storage without showing loading
   Future<void> _restoreOnInit() async {
     try {
+      print('AuthNotifier: Starting restoration check...');
       final token = await SecureStorageService.getAccessToken();
+      
       if (token == null) {
+        print('AuthNotifier: No token found. Unauthenticated.');
         state = AuthUnauthenticated();
         return;
       }
 
       final cached = await SecureStorageService.loadUser();
       if (cached != null) {
+        print('AuthNotifier: Found cached user: ${cached.fullName}. Role: ${cached.role}');
         state = AuthSuccess(cached);
+      } else {
+        print('AuthNotifier: No cached user found.');
       }
 
       try {
-        final res = await _api.get('/api/auth/me/');
+        print('AuthNotifier: Attempting to refresh user from API: ${ApiConfig.currentUser}');
+        // Use a shorter timeout for the background check to prevent startup freeze
+        final res = await _api.get(ApiConfig.currentUser);
+        
         final user = UserModel.fromJson(res.data['user'] as Map<String, dynamic>);
+        print('AuthNotifier: API refresh success. Saving user.');
         await SecureStorageService.saveUser(user);
         state = AuthSuccess(user);
       } catch (e) {
+        print('AuthNotifier: API refresh failed: $e');
+        // If we have a cached user, we stay in AuthSuccess(cached) 
+        // to allow offline/local access until next action fails.
         if (cached == null) {
+          print('AuthNotifier: No cache and API failed. Logging out.');
           await SecureStorageService.clearAll();
           state = AuthUnauthenticated();
         }
       }
-    } catch (_) {
+    } catch (e) {
+      print('AuthNotifier: CRITICAL initialization error: $e');
       state = AuthUnauthenticated();
     }
   }
@@ -62,7 +75,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> loginWithEmail(String email, String password) async {
     state = AuthLoading();
     try {
-      final res = await _api.post('/api/auth/login/email/', data: {
+      final res = await _api.post(ApiConfig.loginEmail, data: {
         'email': email.trim().toLowerCase(),
         'password': password,
       });
@@ -77,7 +90,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> loginWithPrn(String prn, String password) async {
     state = AuthLoading();
     try {
-      final res = await _api.post('/api/auth/login/prn/', data: {
+      final res = await _api.post(ApiConfig.loginPrn, data: {
         'prn': prn.trim().toUpperCase(),
         'password': password,
       });
@@ -89,32 +102,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<UserModel?> restoreSession() async {
-    try {
-      final token = await _storage.read(key: AppConstants.tokenKey);
-      if (token == null) {
-        state = AuthUnauthenticated();
-        return null;
-      }
-      final res  = await _api.get('/api/auth/me/');
-      final user = UserModel.fromJson(
-        res.data['user'] as Map<String, dynamic>,
-      );
-      await SecureStorageService.saveUser(user);
-      state = AuthSuccess(user);
-      return user;
-    } catch (_) {
-      await _storage.deleteAll();
-      state = AuthUnauthenticated();
-      return null;
-    }
-  }
-
   Future<void> logout() async {
     try {
       final refresh = await SecureStorageService.getRefreshToken();
       if (refresh != null) {
-        await _api.post('/api/auth/logout/', data: {'refresh': refresh});
+        await _api.post(ApiConfig.logout, data: {'refresh': refresh});
       }
     } catch (_) {}
     await SecureStorageService.clearAll();
@@ -136,20 +128,24 @@ class AuthNotifier extends StateNotifier<AuthState> {
     if (data is Map && data.containsKey('error')) {
       return data['error'] as String;
     }
+    
     if (e.type == DioExceptionType.connectionTimeout ||
-        e.type == DioExceptionType.receiveTimeout) {
-      return 'Connection timed out. Ensure your PC and phone are on the same Wi-Fi.';
+        e.type == DioExceptionType.receiveTimeout ||
+        e.type == DioExceptionType.sendTimeout) {
+      return 'Unable to connect to server. Please check your internet or PC connection.';
     }
+    
     if (e.type == DioExceptionType.connectionError) {
-      return 'Connection Refused. Verify that your Django server is running on 0.0.0.0:8000 and your firewall allows connections.';
+      return 'Server unreachable. Ensure the backend is running at ${ApiConfig.devIp}.';
     }
-    return 'Network Error: ${e.message ?? "Something went wrong"}. Please check your server IP in settings.';
+    
+    return 'Network Error: Unable to connect to server.';
   }
 }
 
 final authProvider =
     StateNotifierProvider<AuthNotifier, AuthState>((ref) {
-  final api     = ref.read(apiClientProvider);
+  final api     = ref.read(dioClientProvider);
   final storage = ref.read(secureStorageProvider);
   return AuthNotifier(api, storage);
 });

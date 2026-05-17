@@ -17,11 +17,26 @@ try:
 except Exception:
     # Force enable apps but mock the libraries
     sys.modules['django.contrib.gis.geos'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.geometry'] = MagicMock()
     sys.modules['django.contrib.gis.geos.libgeos'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes.io'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes.coordseq'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes.geom'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes.misc'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes.prepared'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.prototypes.threadsafe'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.factory'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.error'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.base'] = MagicMock()
+    sys.modules['django.contrib.gis.geos.io'] = MagicMock()
     sys.modules['django.contrib.gis.gdal'] = MagicMock()
     sys.modules['django.contrib.gis.gdal.libgdal'] = MagicMock()
     sys.modules['django.contrib.gis.gdal.prototypes'] = MagicMock()
     sys.modules['django.contrib.gis.gdal.prototypes.ds'] = MagicMock()
+    sys.modules['django.contrib.gis.gdal.prototypes.generation'] = MagicMock()
+    sys.modules['django.contrib.gis.gdal.error'] = MagicMock()
+    sys.modules['django.contrib.gis.gdal.base'] = MagicMock()
     
     # Mocking Point/Polygon for models
     class MockGeometry:
@@ -37,6 +52,9 @@ except Exception:
     import django.contrib.gis.geos as geos
     geos.Point = MockGeometry
     geos.Polygon = MockGeometry
+    geos.GEOS_VERSION = (3, 8, 0)
+    geos.geos_version = lambda: b"3.8.0-CAPI-1.13.1"
+    geos.geos_version_info = lambda: {'version': '3.8.0', 'release_date': '2020-01-01'}
 
 # Initialize environ
 env = environ.Env(
@@ -129,11 +147,13 @@ ASGI_APPLICATION = 'config.asgi.application'
 # Database
 db_url = env('DATABASE_URL')
 if not ENABLE_GIS:
-    db_url = db_url.replace('postgis://', 'postgres://')
+    # Use standard postgres engine if local GIS libs are missing to prevent backend load errors
+    db_url = db_url.replace('postgis://', 'postgres://').replace('postgresql://', 'postgres://')
 
 DATABASES = {
     'default': env.db_url_config(db_url)
 }
+DATABASES['default']['ENGINE'] = 'django.contrib.gis.db.backends.postgis'
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'

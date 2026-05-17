@@ -1,18 +1,10 @@
-from django.urls import path
-from .views import (
-    VirtualRoomListCreateView,
-    VirtualRoomDetailView,
-    CheckLocationView,
-    RoomStatsView,
-)
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import VirtualRoomViewSet
+
+router = DefaultRouter()
+router.register(r'', VirtualRoomViewSet, basename='virtual-room')
 
 urlpatterns = [
-    path('',
-         VirtualRoomListCreateView.as_view(), name='room-list-create'),
-    path('<uuid:room_id>/',
-         VirtualRoomDetailView.as_view(),     name='room-detail'),
-    path('<uuid:room_id>/check-location/',
-         CheckLocationView.as_view(),          name='room-check-location'),
-    path('<uuid:room_id>/stats/',
-         RoomStatsView.as_view(),              name='room-stats'),
+    path('', include(router.urls)),
 ]

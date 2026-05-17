@@ -156,8 +156,14 @@ class AdminDashboardScreen extends ConsumerWidget {
               mainAxisSpacing: 16,
               childAspectRatio: 1.3,
               children: [
-                // COLLEGE ADMIN ONLY actions — Restricted to Academic Master
+                // COLLEGE ADMIN ONLY actions — Restricted to Academic Master & Users
                 if (isAdmin) ...[
+                  const _QuickActionCard(
+                    label: 'Academic Year',
+                    icon: Icons.event_note_rounded,
+                    color: AppColors.primaryLight,
+                    route: '/admin/academic-years',
+                  ),
                   const _QuickActionCard(
                     label: 'Departments',
                     icon: Icons.apartment_rounded,
@@ -170,16 +176,16 @@ class AdminDashboardScreen extends ConsumerWidget {
                     color: AppColors.warning,
                     route: '/admin/courses',
                   ),
+                  const _QuickActionCard(
+                    label: 'Add User',
+                    icon: Icons.person_add_rounded,
+                    color: AppColors.success,
+                    route: '/admin/users/add',
+                  ),
                 ],
 
-                // LAB ASSISTANT ONLY actions
+                // LAB ASSISTANT ONLY actions — Virtual Rooms & Academic Structure
                 if (isLab) ...[
-                  const _QuickActionCard(
-                    label: 'Academic Year',
-                    icon: Icons.event_note_rounded,
-                    color: AppColors.primaryLight,
-                    route: '/admin/academic-years',
-                  ),
                   const _QuickActionCard(
                     label: 'Virtual Rooms',
                     icon: Icons.sensor_door_rounded,
@@ -187,10 +193,34 @@ class AdminDashboardScreen extends ConsumerWidget {
                     route: '/admin/virtual-rooms',
                   ),
                   const _QuickActionCard(
+                    label: 'Subjects',
+                    icon: Icons.menu_book_rounded,
+                    color: AppColors.warning,
+                    route: '/admin/subjects',
+                  ),
+                  const _QuickActionCard(
+                    label: 'Divisions',
+                    icon: Icons.groups_rounded,
+                    color: AppColors.accent,
+                    route: '/admin/divisions',
+                  ),
+                  const _QuickActionCard(
+                    label: 'Allocations',
+                    icon: Icons.assignment_rounded,
+                    color: AppColors.primaryLight,
+                    route: '/admin/allocations',
+                  ),
+                  const _QuickActionCard(
                     label: 'Enrollments',
                     icon: Icons.how_to_reg_rounded,
-                    color: AppColors.accent,
+                    color: AppColors.success,
                     route: '/admin/enrollments',
+                  ),
+                  const _QuickActionCard(
+                    label: 'Face Register',
+                    icon: Icons.face_retouching_natural_rounded,
+                    color: AppColors.accent,
+                    route: '/admin/face-register',
                   ),
                 ],
               ],

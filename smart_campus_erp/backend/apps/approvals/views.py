@@ -2,13 +2,13 @@ from django.utils import timezone
 from rest_framework.views       import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response    import Response
-from apps.accounts.permissions  import IsPrincipal, IsCollegeAdmin, IsSuperAdmin
+from apps.accounts.permissions  import IsPrincipalOnly, IsSuperAdmin
 from apps.accounts.models       import User
 from .models                    import ApprovalRequest
 
 
 class PendingApprovalListView(APIView):
-    permission_classes = [IsPrincipal | IsCollegeAdmin | IsSuperAdmin]
+    permission_classes = [IsPrincipalOnly | IsSuperAdmin]
 
     def get(self, request):
         qs = ApprovalRequest.objects.select_related(
