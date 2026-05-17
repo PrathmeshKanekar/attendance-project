@@ -34,6 +34,7 @@ import '../../features/college_admin/academic_years_screen.dart';
 import '../../features/virtual_rooms/virtual_rooms_screen.dart';
 import '../../features/virtual_rooms/add_edit_room_screen.dart';
 import '../../features/virtual_rooms/room_detail_screen.dart';
+import '../../features/virtual_rooms/room_preview_screen.dart';
 import '../../features/face_register/face_register_list_screen.dart';
 import '../../features/face_register/face_register_camera_screen.dart';
 import '../../features/notifications/notifications_screen.dart';
@@ -191,6 +192,28 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           builder: (c, s) => AddEditRoomScreen(
             existingRoom: s.extra as Map<String, dynamic>?,
           )),
+      GoRoute(path: '/admin/virtual-rooms/:roomId/preview',
+          builder: (c, s) =>
+              RoomPreviewScreen(roomId: s.pathParameters['roomId']!)),
+
+      // Non-admin / clean namespace routing for virtual rooms
+      GoRoute(path: '/virtual-rooms',
+          name: '/virtual-rooms',
+          builder: (c, s) => const VirtualRoomsScreen()),
+      GoRoute(path: '/virtual-rooms/add',
+          name: '/virtual-rooms/add',
+          builder: (c, s) => const AddEditRoomScreen()),
+      GoRoute(path: '/virtual-rooms/:roomId',
+          name: '/virtual-rooms/:roomId',
+          builder: (c, s) =>
+              RoomDetailScreen(roomId: s.pathParameters['roomId']!)),
+      GoRoute(path: '/virtual-rooms/:roomId/preview',
+          name: '/virtual-rooms/:roomId/preview',
+          builder: (c, s) =>
+              RoomPreviewScreen(roomId: s.pathParameters['roomId']!)),
+      GoRoute(path: '/virtual-rooms/preview',
+          name: '/virtual-rooms/preview',
+          builder: (c, s) => const RoomPreviewScreen(roomId: '')),
       GoRoute(path: '/admin/face-register',
           builder: (c, s) => const FaceRegisterListScreen()),
       GoRoute(path: '/admin/face-register/camera',

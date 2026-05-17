@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,15 +61,25 @@ class _TeacherReportsScreenState extends ConsumerState<TeacherReportsScreen> {
         'threshold'    : _threshold,
       };
 
-      final dir = await getApplicationDocumentsDirectory();
+      // Use a more accessible directory for downloads
+      Directory? dir;
+      if (Theme.of(context).platform == TargetPlatform.android) {
+        dir = Directory('/storage/emulated/0/Download');
+        if (!await dir.exists()) {
+          dir = await getExternalStorageDirectory();
+        }
+      } else {
+        dir = await getApplicationDocumentsDirectory();
+      }
+
       final extension = type == 'pdf' ? 'pdf' : 'xlsx';
       final fileName = 'attendance_${DateTime.now().millisecondsSinceEpoch}.$extension';
-      final savePath = '${dir.path}/$fileName';
+      final savePath = '${dir!.path}/$fileName';
 
       await api.download(
         endpoint,
         savePath,
-        params: queryParams,
+        queryParameters: queryParams, // FIXED: use queryParameters, not params
         onReceiveProgress: (received, total) {
           if (total != -1) {
             debugPrint("${(received / total * 100).toStringAsFixed(0)}%");

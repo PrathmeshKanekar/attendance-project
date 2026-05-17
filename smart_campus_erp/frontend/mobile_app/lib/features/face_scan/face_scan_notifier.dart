@@ -68,6 +68,16 @@ class FaceScanNotifier extends StateNotifier<FaceScanState> {
     required String faceImageB64,
     required ApiClient api,
   }) async {
+    if (_blinkCount < 3) {
+      state = FaceScanFailed('Liveness check failed. 3 blinks required.');
+      return;
+    }
+
+    if (faceImageB64.length < 1000) {
+      state = FaceScanFailed('Image capture failed. Please try again.');
+      return;
+    }
+
     state = FaceScanVerifying();
     try {
       final res = await api.post('/api/attendance/mark/', data: {
@@ -81,10 +91,12 @@ class FaceScanNotifier extends StateNotifier<FaceScanState> {
       });
       state = FaceScanSuccess(res.data['marked_at'] ?? DateTime.now().toIso8601String());
     } on DioException catch (e) {
-      final msg = e.response?.data['error'] ?? 'Verification failed';
-      state = FaceScanFailed(msg);
+      final msg = e.response?.data is Map 
+          ? (e.response?.data['error'] ?? e.response?.data['message'] ?? 'Verification failed')
+          : 'Verification failed';
+      state = FaceScanFailed(msg.toString());
     } catch (e) {
-      state = FaceScanFailed(e.toString());
+      state = FaceScanFailed('Connection error. Please check your internet.');
     }
   }
 

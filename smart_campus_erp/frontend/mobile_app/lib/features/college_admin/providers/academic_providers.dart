@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
 
@@ -30,15 +31,25 @@ final departmentsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 // ── Courses ────────────────────────────────────────────────
 final coursesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   final api = ref.read(apiClientProvider);
-  final res = await api.get('/api/courses/');
-  return _parseList(res.data);
+  try {
+    final res = await api.get('/api/courses/');
+    return _parseList(res.data);
+  } on DioException catch (e) {
+    if (e.response?.statusCode == 403) return [];
+    rethrow;
+  }
 });
 
 // ── Academic Years ─────────────────────────────────────────
 final academicYearsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   final api = ref.read(apiClientProvider);
-  final res = await api.get('/api/academic-years/');
-  return _parseList(res.data);
+  try {
+    final res = await api.get('/api/academic-years/');
+    return _parseList(res.data);
+  } on DioException catch (e) {
+    if (e.response?.statusCode == 403) return [];
+    rethrow;
+  }
 });
 
 // ── Divisions ──────────────────────────────────────────────
@@ -78,24 +89,3 @@ final studentsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async 
   return _parseList(res.data);
 });
 
-// ── Principal existence check ──────────────────────────────
-final principalExistsProvider = FutureProvider<bool>((ref) async {
-  final api = ref.read(apiClientProvider);
-  try {
-    final res = await api.get('/api/auth/users/', params: {
-      'role': 'principal',
-      'is_approved': 'true',
-      'is_active': 'true',
-    });
-    
-    if (res.data is Map && res.data.containsKey('users')) {
-      final users = res.data['users'] as List;
-      return users.isNotEmpty;
-    } else if (res.data is List) {
-      return res.data.isNotEmpty;
-    }
-    return false;
-  } catch (e) {
-    return false;
-  }
-});

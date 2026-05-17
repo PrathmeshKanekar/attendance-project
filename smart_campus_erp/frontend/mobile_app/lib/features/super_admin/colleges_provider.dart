@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import '../../core/network/api_client.dart';
+import '../../core/config/api_config.dart';
 
 final collegesProvider =
     FutureProvider<Map<String, dynamic>>((ref) async {
@@ -8,25 +10,44 @@ final collegesProvider =
 
   final api = ref.read(apiClientProvider);
   try {
-    final res = await api.get('/api/colleges/');
+    // USE CENTRALIZED CONFIG
+    final res = await api.get(ApiConfig.colleges);
+    final rawData = res.data;
 
-    // CRITICAL FIX: handle both list and map response formats
-    if (res.data is List) {
-      // API returned list directly
-      final list = List<Map<String, dynamic>>.from(
-        (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
-      );
-      return {
-        'colleges'      : list,
-        'total'         : list.length,
-        'active_count'  : list.where((c) => c['is_active'] == true).length,
-        'inactive_count': list.where((c) => c['is_active'] != true).length,
+    // Standardize response to a Map<String, dynamic>
+    Map<String, dynamic> root = {};
+    if (rawData is List) {
+      root = {
+        'colleges': rawData,
+        'total': rawData.length,
       };
+    } else if (rawData is Map) {
+      root = Map<String, dynamic>.from(rawData);
+      // Handle nested 'data' wrapper if present
+      if (root.containsKey('data') && root['data'] is Map) {
+        root = Map<String, dynamic>.from(root['data'] as Map);
+      } else if (root.containsKey('data') && root['data'] is List) {
+        // Some APIs return { "data": [...] }
+        root = {
+          'colleges': root['data'],
+          'total': (root['data'] as List).length,
+        };
+      }
     }
 
-    // API returned map with colleges key
-    final data = Map<String, dynamic>.from(res.data as Map);
-    return data;
+    // Extract the colleges list with fallback keys
+    final collegesRaw = root['colleges'] ?? root['results'] ?? root['data'] ?? [];
+    final collegesList = (collegesRaw as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+
+    return {
+      ...root,
+      'colleges': collegesList,
+      'total': (root['total'] ?? root['count'] ?? collegesList.length) as int,
+      'active_count': (root['active_count'] ?? collegesList.where((c) => c['is_active'] == true).length) as int,
+      'inactive_count': (root['inactive_count'] ?? collegesList.where((c) => c['is_active'] != true).length) as int,
+    };
   } catch (e) {
     rethrow;
   }
@@ -54,7 +75,7 @@ class CollegeCrudNotifier extends StateNotifier<CollegeCrudState> {
   Future<bool> createCollege(Map<String, dynamic> data) async {
     state = CollegeCrudLoading();
     try {
-      final res = await _api.post('/api/colleges/', data: data);
+      final res = await _api.post(ApiConfig.colleges, data: data);
       _ref.invalidate(collegesProvider);
       
       final responseData = Map<String, dynamic>.from(res.data as Map);
@@ -74,7 +95,7 @@ class CollegeCrudNotifier extends StateNotifier<CollegeCrudState> {
   Future<bool> updateCollege(String id, Map<String, dynamic> data) async {
     state = CollegeCrudLoading();
     try {
-      final res = await _api.put('/api/colleges/$id/', data: data);
+      final res = await _api.put('${ApiConfig.colleges}$id/', data: data);
       _ref.invalidate(collegesProvider);
       state = CollegeCrudSuccess(
         res.data['message']?.toString() ?? 'College updated.',
@@ -89,7 +110,7 @@ class CollegeCrudNotifier extends StateNotifier<CollegeCrudState> {
   Future<bool> deactivateCollege(String id) async {
     state = CollegeCrudLoading();
     try {
-      final res = await _api.delete('/api/colleges/$id/');
+      final res = await _api.delete('${ApiConfig.colleges}$id/');
       _ref.invalidate(collegesProvider);
       state = CollegeCrudSuccess(
         res.data['message']?.toString() ?? 'College deactivated.',
@@ -104,7 +125,7 @@ class CollegeCrudNotifier extends StateNotifier<CollegeCrudState> {
   Future<bool> activateCollege(String id) async {
     state = CollegeCrudLoading();
     try {
-      final res = await _api.post('/api/colleges/$id/activate/');
+      final res = await _api.post('${ApiConfig.colleges}$id/activate/');
       _ref.invalidate(collegesProvider);
       state = CollegeCrudSuccess(
         res.data['message']?.toString() ?? 'College activated.',
@@ -118,7 +139,19 @@ class CollegeCrudNotifier extends StateNotifier<CollegeCrudState> {
 
   void reset() => state = CollegeCrudIdle();
 
-  String _extract(Exception e) {
+  String _extract(Object e) {
+    if (e is DioException) {
+      if (e.response?.statusCode == 403) {
+        return 'Permission denied: Restricted to Super Admin.';
+      }
+      final data = e.response?.data;
+      if (data is Map && data.containsKey('error')) {
+        return data['error'].toString();
+      }
+      if (data is Map && data.containsKey('detail')) {
+        return data['detail'].toString();
+      }
+    }
     final msg = e.toString();
     if (msg.contains('"error"')) {
       try {

@@ -165,7 +165,11 @@ class AcademicYearsScreen extends ConsumerWidget {
                   labelText: 'Year Name',
                   hintText: 'e.g. 2025-2026',
                 ),
-                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Required';
+                  if (!RegExp(r'^\d{4}-\d{4}$').hasMatch(v)) return 'Format: YYYY-YYYY';
+                  return null;
+                },
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -181,7 +185,7 @@ class AcademicYearsScreen extends ConsumerWidget {
                     context: context,
                     initialDate: DateTime.now(),
                     firstDate: DateTime(2020),
-                    lastDate: DateTime(2030),
+                    lastDate: DateTime(2035),
                   );
                   if (d != null) startCtrl.text = d.toString().split(' ')[0];
                 },
@@ -201,11 +205,19 @@ class AcademicYearsScreen extends ConsumerWidget {
                     context: context,
                     initialDate: DateTime.now().add(const Duration(days: 365)),
                     firstDate: DateTime(2020),
-                    lastDate: DateTime(2030),
+                    lastDate: DateTime(2035),
                   );
                   if (d != null) endCtrl.text = d.toString().split(' ')[0];
                 },
-                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Required';
+                  if (startCtrl.text.isNotEmpty) {
+                    final start = DateTime.parse(startCtrl.text);
+                    final end = DateTime.parse(v);
+                    if (!end.isAfter(start)) return 'Must be after start date';
+                  }
+                  return null;
+                },
               ),
             ],
           ),

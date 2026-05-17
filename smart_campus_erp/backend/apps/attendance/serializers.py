@@ -82,52 +82,89 @@ class CreateSessionSerializer(serializers.Serializer):
     scheduled_start       = serializers.DateTimeField()
     scheduled_end         = serializers.DateTimeField()
     teacher_lat           = serializers.DecimalField(
-        max_digits=10, decimal_places=7
+        max_digits=10, decimal_places=7, min_value=-90, max_value=90
     )
     teacher_lng           = serializers.DecimalField(
-        max_digits=10, decimal_places=7
+        max_digits=10, decimal_places=7, min_value=-180, max_value=180
     )
-    teacher_altitude      = serializers.FloatField(default=0.0)
-    teacher_accuracy      = serializers.FloatField(default=10.0)
-    radius_meters         = serializers.FloatField(default=30.0)
+    teacher_altitude      = serializers.FloatField(default=0.0, min_value=-100, max_value=9000)
+    teacher_accuracy      = serializers.FloatField(default=10.0, min_value=0, max_value=1000)
+    radius_meters         = serializers.FloatField(default=30.0, min_value=5, max_value=150)
 
     def validate(self, data):
         if data['scheduled_end'] <= data['scheduled_start']:
-            raise serializers.ValidationError(
-                'scheduled_end must be after scheduled_start.'
-            )
+            raise serializers.ValidationError({
+                'scheduled_end': 'Session end must be after start.'
+            })
+        
+        import re
+        # Check for duration (min 15 mins, max 6 hours)
+        delta = data['scheduled_end'] - data['scheduled_start']
+        if delta.total_seconds() < 900:
+            raise serializers.ValidationError('Session must be at least 15 minutes.')
+        if delta.total_seconds() > 21600:
+            raise serializers.ValidationError('Session cannot exceed 6 hours.')
+            
         return data
 
 
 class MarkAttendanceSerializer(serializers.Serializer):
     session_id     = serializers.UUIDField()
-    lat            = serializers.FloatField()
-    lng            = serializers.FloatField()
-    altitude       = serializers.FloatField(default=0.0)
-    accuracy       = serializers.FloatField(default=10.0)
+    lat            = serializers.FloatField(min_value=-90, max_value=90)
+    lng            = serializers.FloatField(min_value=-180, max_value=180)
+    altitude       = serializers.FloatField(default=0.0, min_value=-100, max_value=9000)
+    accuracy       = serializers.FloatField(default=10.0, min_value=0, max_value=500)
     device_id      = serializers.CharField(max_length=255)
     face_image_b64    = serializers.CharField()
-    blink_count       = serializers.IntegerField(min_value=0)
-    compass_direction = serializers.FloatField(required=False, default=0.0)
-    device_movement   = serializers.CharField(required=False, allow_blank=True, default='')
+    blink_count       = serializers.IntegerField(min_value=3)
+    compass_direction = serializers.FloatField(required=False, default=0.0, min_value=0, max_value=360)
+    device_movement   = serializers.CharField(required=False, allow_blank=True, default='', max_length=1000)
 
     def validate_face_image_b64(self, value):
-        if not value or len(value) < 100:
+        if not value or len(value) < 1000: # Base64 for a real image is usually large
             raise serializers.ValidationError(
                 'Invalid face image. Please retake the photo.'
             )
+        # Check for base64 prefix if present
+        if ',' in value:
+            val = value.split(',')[1]
+        else:
+            val = value
+            
+        import base64
+        try:
+            base64.b64decode(val[:100], validate=True)
+        except Exception:
+            raise serializers.ValidationError('Invalid base64 encoding.')
+            
+        return value
+
+    def validate_device_id(self, value):
+        import re
+        if not re.match(r'^[a-zA-Z0-9\-\:_]{5,255}$', value):
+            raise serializers.ValidationError('Invalid device identifier format.')
         return value
 
 
 class CheckLocationSerializer(serializers.Serializer):
     session_id = serializers.UUIDField()
-    lat        = serializers.FloatField()
-    lng        = serializers.FloatField()
-    altitude   = serializers.FloatField(default=0.0)
-    accuracy   = serializers.FloatField(default=10.0)
+    lat        = serializers.FloatField(min_value=-90, max_value=90)
+    lng        = serializers.FloatField(min_value=-180, max_value=180)
+    altitude   = serializers.FloatField(default=0.0, min_value=-100, max_value=9000)
+    accuracy   = serializers.FloatField(default=10.0, min_value=0, max_value=500)
 
 
 class ManualAttendanceSerializer(serializers.Serializer):
     session_id = serializers.UUIDField()
     student_id = serializers.UUIDField()
-    reason     = serializers.CharField(min_length=5)
+    reason     = serializers.CharField(min_length=5, max_length=500)
+
+    def validate_reason(self, value):
+        import re
+        # Prevent SQL injection symbols and excessive spaces
+        val = re.sub(r'\s+', ' ', value).strip()
+        forbidden = [';', '--', '/*', '*/', '<', '>', 'xp_']
+        for char in forbidden:
+            if char in val:
+                raise serializers.ValidationError(f'Character "{char}" not allowed.')
+        return val

@@ -132,7 +132,7 @@ class _FaceScanScreenState extends ConsumerState<FaceScanScreen> {
       _compassSub = FlutterCompass.events?.listen((event) {
         _compassHeading = event.heading ?? 0.0;
       });
-      _accelSub = accelerometerEvents.listen((event) {
+      _accelSub = accelerometerEventStream().listen((event) {
         final accel = (event.x * event.x + event.y * event.y + event.z * event.z);
         if (accel > _maxAcceleration) _maxAcceleration = accel;
       });

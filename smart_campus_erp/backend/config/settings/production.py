@@ -10,7 +10,7 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='').split(',')
 # ── Database ───────────────────────────────────────────────
 DATABASES = {
     'default': {
-        'ENGINE'  : 'django.db.backends.postgresql',
+        'ENGINE'  : 'django.contrib.gis.db.backends.postgis',
         'NAME'    : config('DB_NAME'),
         'USER'    : config('DB_USER'),
         'PASSWORD': config('DB_PASSWORD'),

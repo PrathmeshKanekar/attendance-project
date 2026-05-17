@@ -1,8 +1,13 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/layout/app_layout.dart';
+import '../../core/network/api_client.dart';
 import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/loading_widget.dart';
 import '../../core/widgets/empty_state_widget.dart';
@@ -20,6 +25,7 @@ class _DefaultersScreenState extends ConsumerState<DefaultersScreen> {
   String? _selectedAllocationId;
   double _threshold = 75.0;
   final _thresholdController = TextEditingController(text: '75');
+  bool _isDownloading = false;
 
   @override
   void dispose() {
@@ -32,6 +38,64 @@ class _DefaultersScreenState extends ConsumerState<DefaultersScreen> {
     'threshold': _threshold.toString(),
   };
 
+  Future<void> _downloadFile(String type) async {
+    setState(() => _isDownloading = true);
+    try {
+      final api = ref.read(apiClientProvider);
+      final endpoint = type == 'pdf' ? '/api/reports/download/pdf/' : '/api/reports/download/excel/';
+      
+      // If no allocation is selected, the defaulters view usually shows all,
+      // but the download endpoint requires allocation_id.
+      // We should either modify backend or inform user.
+      if (_selectedAllocationId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please select a specific subject to download the report.')),
+        );
+        return;
+      }
+
+      final queryParams = {
+        'allocation_id': _selectedAllocationId,
+        'threshold'    : _threshold,
+      };
+
+      Directory? dir;
+      if (Platform.isAndroid) {
+        dir = Directory('/storage/emulated/0/Download');
+        if (!await dir.exists()) dir = await getExternalStorageDirectory();
+      } else {
+        dir = await getApplicationDocumentsDirectory();
+      }
+
+      final extension = type == 'pdf' ? 'pdf' : 'xlsx';
+      final fileName = 'defaulters_${DateTime.now().millisecondsSinceEpoch}.$extension';
+      final savePath = '${dir!.path}/$fileName';
+
+      await api.download(
+        endpoint,
+        savePath,
+        queryParameters: queryParams,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Defaulters list (${type.toUpperCase()}) saved'),
+            action: SnackBarAction(label: 'Open', onPressed: () => OpenFilex.open(savePath)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download failed: $e'), backgroundColor: AppColors.danger),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final allocationsAsync = ref.watch(teacherAllocationsProvider);
@@ -39,6 +103,25 @@ class _DefaultersScreenState extends ConsumerState<DefaultersScreen> {
 
     return AppLayout(
       title: 'Defaulters List',
+      actions: [
+        if (_isDownloading)
+          const Center(child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+          ))
+        else ...[
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            onPressed: () => _downloadFile('pdf'),
+            tooltip: 'Download PDF',
+          ),
+          IconButton(
+            icon: const Icon(Icons.table_view_outlined),
+            onPressed: () => _downloadFile('excel'),
+            tooltip: 'Download Excel',
+          ),
+        ]
+      ],
       child: Column(
         children: [
           // ── Filter Section ──────────────────────────────

@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/config/api_config.dart';
 import '../../core/models/user_model.dart';
 import '../../core/constants/app_constants.dart';
-import '../../core/network/api_client.dart';
+import '../../core/network/dio_client.dart';
+import '../../core/utils/form_validators.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -72,32 +74,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     }
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-  }
-
   void _submitEmail() {
     if (!_emailFormKey.currentState!.validate()) return;
+    
+    final authState = ref.read(authProvider);
+    if (authState is AuthLoading) return; // Prevent duplicate
+
     FocusScope.of(context).unfocus();
     ref.read(authProvider.notifier).loginWithEmail(
-      _emailCtrl.text,
+      _emailCtrl.text.trim(),
       _emailPwdCtrl.text,
     );
   }
 
   void _submitPrn() {
     if (!_prnFormKey.currentState!.validate()) return;
+
+    final authState = ref.read(authProvider);
+    if (authState is AuthLoading) return; // Prevent duplicate
+
     FocusScope.of(context).unfocus();
     ref.read(authProvider.notifier).loginWithPrn(
-      _prnCtrl.text,
+      _prnCtrl.text.trim().toUpperCase(),
       _prnPwdCtrl.text,
     );
   }
 
   void _showBaseUrlDialog() async {
-    final storage = ref.read(secureStorageProvider);
-    final currentUrl = await storage.read(key: 'custom_base_url') ?? AppConstants.baseUrl;
+    final currentUrl = await ApiConfig.baseUrl;
     final ctrl = TextEditingController(text: currentUrl);
 
     if (!mounted) return;
@@ -109,6 +113,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('Enter local backend server URL (include http:// and port):'),
+            const SizedBox(height: 4),
+            const Text(
+              'Tip: Ensure your phone and PC are on the same Wi-Fi network.',
+              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: ctrl,
@@ -126,7 +135,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
           ElevatedButton(
             onPressed: () async {
               final messenger = ScaffoldMessenger.of(context);
-              await storage.write(key: 'custom_base_url', value: ctrl.text.trim());
+              await ApiConfig.setCustomBaseUrl(ctrl.text.trim());
               if (context.mounted) Navigator.pop(context);
               messenger.showSnackBar(
                 const SnackBar(content: Text('Server URL updated successfully!')),
@@ -422,15 +431,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               hintText    : 'Email address',
               prefixIcon  : Icon(Icons.email_outlined),
             ),
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) {
-                return 'Email is required';
-              }
-              if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(v.trim())) {
-                return 'Enter a valid email address';
-              }
-              return null;
-            },
+            validator: FormValidators.email,
           ),
           const SizedBox(height: 14),
           TextFormField(
@@ -502,12 +503,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               hintText   : 'PRN Number (e.g. DEC2024001)',
               prefixIcon : Icon(Icons.badge_outlined),
             ),
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) {
-                return 'PRN number is required';
-              }
-              return null;
-            },
+            validator: (v) => FormValidators.required(v, 'PRN number'),
           ),
           const SizedBox(height: 14),
           TextFormField(

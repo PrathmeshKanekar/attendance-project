@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/app_colors.dart';
@@ -40,25 +41,36 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
       ),
       child: async.when(
         loading: () => const LoadingWidget(message: 'Loading colleges...'),
-        error  : (e, _) => AppErrorWidget(
-          message: e.toString(),
-          onRetry: () => ref.invalidate(collegesProvider),
-        ),
-        data   : (data) {
-          final allColleges = List<Map<String, dynamic>>.from(
-            data['colleges'] as List,
+        error  : (e, _) {
+          if (e is DioException && e.response?.statusCode == 403) {
+            return const Center(
+              child: Text(
+                'Permission denied: Only Super Admin can manage colleges.',
+                style: TextStyle(color: AppColors.danger),
+              ),
+            );
+          }
+          return AppErrorWidget(
+            message: e.toString(),
+            onRetry: () => ref.invalidate(collegesProvider),
           );
-          final total         = data['total']         as int? ?? 0;
-          final activeCount   = data['active_count']  as int? ?? 0;
-          final inactiveCount = data['inactive_count']as int? ?? 0;
+        },
+        data   : (data) {
+          final allColleges   = List<Map<String, dynamic>>.from(data['colleges'] ?? []);
+          final total         = (data['total'] as num?)?.toInt() ?? allColleges.length;
+          final activeCount   = (data['active_count'] as num?)?.toInt() ?? 
+                                allColleges.where((c) => c['is_active'] == true).length;
+          final inactiveCount = (data['inactive_count'] as num?)?.toInt() ?? 
+                                allColleges.where((c) => c['is_active'] != true).length;
 
           // Apply local filters
           var filtered = allColleges.where((c) {
+            final name = (c['name'] ?? c['college_name'] ?? '').toString();
+            final code = (c['code'] ?? c['college_code'] ?? '').toString();
+            
             final matchSearch = _search.isEmpty
-                || c['name'].toString().toLowerCase()
-                    .contains(_search.toLowerCase())
-                || c['code'].toString().toLowerCase()
-                    .contains(_search.toLowerCase());
+                || name.toLowerCase().contains(_search.toLowerCase())
+                || code.toLowerCase().contains(_search.toLowerCase());
             final matchFilter = _filter == 'all'
                 || (_filter == 'active'   && c['is_active'] == true)
                 || (_filter == 'inactive' && c['is_active'] == false);
@@ -351,29 +363,47 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
                           }
                         };
 
-                        final success = isEdit 
-                          ? await ref.read(collegeCrudProvider.notifier).updateCollege(college['id'].toString(), data)
-                          : await ref.read(collegeCrudProvider.notifier).createCollege(data);
+                        try {
+                          final collegeId = (college?['id'] ?? college?['uuid'] ?? '').toString();
+                          final success = isEdit 
+                            ? await ref.read(collegeCrudProvider.notifier).updateCollege(collegeId, data)
+                            : await ref.read(collegeCrudProvider.notifier).createCollege(data);
 
-                        if (ctx.mounted) Navigator.pop(ctx);
+                          if (ctx.mounted) Navigator.pop(ctx);
 
-                        if (context.mounted) {
-                          final state = ref.read(collegeCrudProvider);
-                          if (success && state is CollegeCrudSuccess) {
-                            if (state.data != null) {
-                              // Show credentials modal for new college
-                              _showCredentialsDialog(context, state.data!);
-                            } else {
+                          if (context.mounted) {
+                            final state = ref.read(collegeCrudProvider);
+                            if (success && state is CollegeCrudSuccess) {
+                              if (state.data != null) {
+                                // Show credentials modal for new college
+                                _showCredentialsDialog(context, state.data!);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(state.message), backgroundColor: AppColors.success),
+                                );
+                              }
+                            } else if (state is CollegeCrudError) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(state.message), backgroundColor: AppColors.success),
+                                SnackBar(content: Text(state.message), backgroundColor: AppColors.danger),
                               );
                             }
-                          } else if (state is CollegeCrudError) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(state.message), backgroundColor: AppColors.danger),
-                            );
+                            ref.read(collegeCrudProvider.notifier).reset();
                           }
-                          ref.read(collegeCrudProvider.notifier).reset();
+                        } on DioException catch (e) {
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          if (e.response?.statusCode == 403 && context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('You do not have permission to perform this action.'),
+                                backgroundColor: AppColors.danger,
+                              ),
+                            );
+                            return;
+                          }
+                          rethrow;
+                        } catch (e) {
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          rethrow;
                         }
                       },
                 child: isLoading
@@ -485,29 +515,43 @@ class _CollegesScreenState extends ConsumerState<CollegesScreen> {
 
     if (confirmed != true || !context.mounted) return;
 
-    bool success;
-    if (isActive) {
-      success = await ref
-          .read(collegeCrudProvider.notifier)
-          .deactivateCollege(college['id'].toString());
-    } else {
-      success = await ref
-          .read(collegeCrudProvider.notifier)
-          .activateCollege(college['id'].toString());
-    }
+    try {
+      bool success;
+      final collegeId = (college['id'] ?? college['uuid'] ?? '').toString();
+      if (isActive) {
+        success = await ref
+            .read(collegeCrudProvider.notifier)
+            .deactivateCollege(collegeId);
+      } else {
+        success = await ref
+            .read(collegeCrudProvider.notifier)
+            .activateCollege(collegeId);
+      }
 
-    if (context.mounted) {
-      final state = ref.read(collegeCrudProvider);
-      final msg   = state is CollegeCrudSuccess
-          ? state.message
-          : state is CollegeCrudError ? state.message : '';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content        : Text(msg),
-          backgroundColor: success ? AppColors.success : AppColors.danger,
-        ),
-      );
-      ref.read(collegeCrudProvider.notifier).reset();
+      if (context.mounted) {
+        final state = ref.read(collegeCrudProvider);
+        final msg   = state is CollegeCrudSuccess
+            ? state.message
+            : state is CollegeCrudError ? state.message : '';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content        : Text(msg),
+            backgroundColor: success ? AppColors.success : AppColors.danger,
+          ),
+        );
+        ref.read(collegeCrudProvider.notifier).reset();
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 403 && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You do not have permission to perform this action.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+        return;
+      }
+      rethrow;
     }
   }
 }
@@ -579,165 +623,180 @@ class _CollegeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // CRITICAL FIX: safe string conversion for all fields
-    final name       = college['name']?.toString()         ?? 'Unknown';
-    final code       = college['code']?.toString()         ?? '';
-    final domain     = college['email_domain']?.toString() ?? '';
-    final address    = college['address']?.toString()      ?? '';
-    final phone      = college['phone']?.toString()        ?? '';
-    final isActive   = college['is_active'] == true;
-    final userCount  = (college['user_count'] as num?)?.toInt() ?? 0;
+    // ROBUST DATA BINDING: Support multiple possible keys and handle nulls
+    final name       = (college['name'] ?? college['college_name'] ?? 'Unknown').toString();
+    final code       = (college['code'] ?? college['college_code'] ?? '').toString();
+    final domain     = (college['email_domain'] ?? college['domain'] ?? '').toString();
+    final address    = (college['address'] ?? college['location'] ?? '').toString();
+    final phone      = (college['phone'] ?? '').toString();
+    final isActive   = college['is_active'] == true || college['status'] == 'active';
+    final userCount  = (college['user_count'] as num?)?.toInt() ?? 
+                       (college['student_count'] as num?)?.toInt() ?? 0;
 
+    final statusColor = isActive ? AppColors.success : AppColors.danger;
 
     return Container(
-      padding   : const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color       : AppColors.cardBg,
+        color: AppColors.cardBg,
         borderRadius: BorderRadius.circular(14),
-        border      : Border(
-          left  : BorderSide(
-            color: isActive ? AppColors.success : AppColors.danger,
-            width: 4,
-          ),
-          top   : const BorderSide(color: AppColors.borderColor),
-          right : const BorderSide(color: AppColors.borderColor),
-          bottom: const BorderSide(color: AppColors.borderColor),
-        ),
+        border: Border.all(color: AppColors.borderColor),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          // ── Header row ────────────────────────────────
-          Row(
-            children: [
-              Container(
-                width : 44, height: 44,
-                decoration: BoxDecoration(
-                  color       : AppColors.primaryLight.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.school_rounded,
-                  color: AppColors.primaryLight,
-                  size : 24,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Left Status Bar
+            Container(
+              width: 4,
+              decoration: BoxDecoration(
+                color: statusColor,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(14),
+                  bottomLeft: Radius.circular(14),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
+            ),
+            // Card Content
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize  : 15,
-                        color     : AppColors.textPrimary,
-                      ),
+                    // ── Header row ────────────────────────────────
+                    Row(
+                      children: [
+                        Container(
+                          width : 44, height: 44,
+                          decoration: BoxDecoration(
+                            color       : AppColors.primaryLight.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.school_rounded,
+                            color: AppColors.primaryLight,
+                            size : 24,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize  : 15,
+                                  color     : AppColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                domain,
+                                style: const TextStyle(
+                                  color  : AppColors.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Status chip
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color       : isActive
+                                ? AppColors.success.withOpacity(0.10)
+                                : AppColors.danger.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            isActive ? '● Active' : '○ Inactive',
+                            style: TextStyle(
+                              color    : isActive ? AppColors.success : AppColors.danger,
+                              fontSize : 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      domain,
-                      style: const TextStyle(
-                        color  : AppColors.textSecondary,
-                        fontSize: 12,
-                      ),
+
+                    const SizedBox(height: 12),
+
+                    // ── Info row ──────────────────────────────────
+                    Wrap(
+                      spacing    : 12,
+                      runSpacing : 6,
+                      children   : [
+                        _InfoItem(
+                          icon : Icons.tag_rounded,
+                          label: code,
+                        ),
+                        _InfoItem(
+                          icon : Icons.people_rounded,
+                          label: '$userCount users',
+                        ),
+                        if (phone.isNotEmpty)
+                          _InfoItem(
+                            icon : Icons.phone_rounded,
+                            label: phone,
+                          ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 4),
+
+                    _InfoItem(
+                      icon : Icons.location_on_rounded,
+                      label: address,
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // ── Action buttons ────────────────────────────
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        OutlinedButton.icon(
+                          style    : OutlinedButton.styleFrom(
+                            foregroundColor: isActive ? AppColors.danger : AppColors.success,
+                            side           : BorderSide(
+                              color: isActive ? AppColors.danger : AppColors.success,
+                            ),
+                            minimumSize: const Size(0, 38),
+                            padding    : const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                          onPressed: onToggle,
+                          icon : Icon(
+                            isActive
+                                ? Icons.block_rounded
+                                : Icons.check_circle_rounded,
+                            size: 16,
+                          ),
+                          label: Text(isActive ? 'Deactivate' : 'Activate'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          style    : ElevatedButton.styleFrom(
+                            minimumSize: const Size(0, 38),
+                            padding    : const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                          onPressed: onEdit,
+                          icon : const Icon(Icons.edit_rounded, size: 16),
+                          label: const Text('Edit'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              // Status chip
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color       : isActive
-                      ? AppColors.success.withOpacity(0.10)
-                      : AppColors.danger.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  isActive ? '● Active' : '○ Inactive',
-                  style: TextStyle(
-                    color    : isActive ? AppColors.success : AppColors.danger,
-                    fontSize : 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // ── Info row ──────────────────────────────────
-          Wrap(
-            spacing    : 12,
-            runSpacing : 6,
-            children   : [
-              _InfoItem(
-                icon : Icons.tag_rounded,
-                label: code,
-              ),
-              _InfoItem(
-                icon : Icons.people_rounded,
-                label: '$userCount users',
-              ),
-              if (phone.isNotEmpty)
-                _InfoItem(
-                  icon : Icons.phone_rounded,
-                  label: phone,
-                ),
-            ],
-          ),
-
-          const SizedBox(height: 4),
-
-          _InfoItem(
-            icon : Icons.location_on_rounded,
-            label: address,
-          ),
-
-          const SizedBox(height: 12),
-
-
-          // ── Action buttons ────────────────────────────
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              OutlinedButton.icon(
-                style    : OutlinedButton.styleFrom(
-                  foregroundColor: isActive ? AppColors.danger : AppColors.success,
-                  side           : BorderSide(
-                    color: isActive ? AppColors.danger : AppColors.success,
-                  ),
-                  minimumSize: const Size(0, 38),
-                  padding    : const EdgeInsets.symmetric(horizontal: 12),
-                ),
-                onPressed: onToggle,
-                icon : Icon(
-                  isActive
-                      ? Icons.block_rounded
-                      : Icons.check_circle_rounded,
-                  size: 16,
-                ),
-                label: Text(isActive ? 'Deactivate' : 'Activate'),
-              ),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(
-                style    : ElevatedButton.styleFrom(
-                  minimumSize: const Size(0, 38),
-                  padding    : const EdgeInsets.symmetric(horizontal: 12),
-                ),
-                onPressed: onEdit,
-                icon : const Icon(Icons.edit_rounded, size: 16),
-                label: const Text('Edit'),
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }

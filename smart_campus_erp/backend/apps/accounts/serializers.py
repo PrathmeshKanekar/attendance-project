@@ -42,10 +42,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 
 class CreateUserSerializer(serializers.ModelSerializer):
-    password  = serializers.CharField(write_only=True, min_length=6)
-    prn       = serializers.CharField(required=False, allow_blank=True)
-    roll_number = serializers.CharField(required=False, allow_blank=True)
-    year_of_study = serializers.IntegerField(required=False)
+    password  = serializers.CharField(
+        write_only=True, 
+        min_length=8,
+        error_messages={
+            'min_length': 'Password must be at least 8 characters long.',
+        }
+    )
+    prn       = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    roll_number = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    year_of_study = serializers.IntegerField(required=False, min_value=1, max_value=10)
     division_id = serializers.UUIDField(required=False)
 
     class Meta:
@@ -55,6 +61,65 @@ class CreateUserSerializer(serializers.ModelSerializer):
             'phone', 'role',
             'prn', 'roll_number', 'year_of_study', 'division_id',
         ]
+
+    def _sanitize_string(self, value):
+        if value:
+            # Remove multiple spaces and strip
+            import re
+            value = re.sub(r'\s+', ' ', value).strip()
+            # Prevent SQL/Script injection symbols
+            forbidden = ['<', '>', ';', '--', '/*', '*/', 'xp_']
+            for char in forbidden:
+                if char in value:
+                    raise serializers.ValidationError(f'Character "{char}" is not allowed.')
+        return value
+
+    def validate_first_name(self, value):
+        val = self._sanitize_string(value)
+        if not val:
+            raise serializers.ValidationError('First name cannot be empty.')
+        if len(val) < 2:
+            raise serializers.ValidationError('First name is too short.')
+        return val
+
+    def validate_last_name(self, value):
+        val = self._sanitize_string(value)
+        if not val:
+            raise serializers.ValidationError('Last name cannot be empty.')
+        return val
+
+    def validate_email(self, value):
+        import re
+        val = value.strip().lower()
+        email_regex = r'^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$'
+        if not re.match(email_regex, val):
+            raise serializers.ValidationError('Invalid email format.')
+        if User.objects.filter(email=val).exists():
+            raise serializers.ValidationError('A user with this email already exists.')
+        return val
+
+    def validate_phone(self, value):
+        if value:
+            import re
+            # Only digits allowed (plus optional + at start)
+            val = value.strip().replace(' ', '')
+            phone_regex = r'^\+?\d{10,15}$'
+            if not re.match(phone_regex, val):
+                raise serializers.ValidationError('Phone must be 10-15 digits only.')
+            return val
+        return value
+
+    def validate_password(self, value):
+        import re
+        if not re.search(r'[A-Z]', value):
+            raise serializers.ValidationError('Password must contain at least one uppercase letter.')
+        if not re.search(r'[a-z]', value):
+            raise serializers.ValidationError('Password must contain at least one lowercase letter.')
+        if not re.search(r'\d', value):
+            raise serializers.ValidationError('Password must contain at least one digit.')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', value):
+            raise serializers.ValidationError('Password must contain at least one special character.')
+        return value
 
     def validate_role(self, value):
         allowed = [
@@ -66,6 +131,23 @@ class CreateUserSerializer(serializers.ModelSerializer):
                 f'Role must be one of: {", ".join(allowed)}'
             )
         return value
+
+    def validate(self, data):
+        role = data.get('role')
+        if role == 'student':
+            # Check PRN and Roll Number
+            if not data.get('prn'):
+                raise serializers.ValidationError({'prn': 'PRN is required for students.'})
+            if not data.get('roll_number'):
+                raise serializers.ValidationError({'roll_number': 'Roll number is required for students.'})
+            if not data.get('division_id'):
+                raise serializers.ValidationError({'division_id': 'Division is required for students.'})
+            
+            # Sanitize them
+            data['prn'] = self._sanitize_string(data.get('prn', ''))
+            data['roll_number'] = self._sanitize_string(data.get('roll_number', ''))
+            
+        return data
 
 
 class ApprovalRequestSerializer(serializers.ModelSerializer):

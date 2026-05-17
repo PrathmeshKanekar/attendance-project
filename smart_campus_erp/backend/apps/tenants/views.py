@@ -10,7 +10,7 @@ from .models import College
 class CollegeListCreateView(APIView):
     def get_permissions(self):
         if self.request.method == 'GET':
-            return []  # AllowAny for list
+            return []  # AllowAny for registration/list
         return [IsSuperAdmin()]
 
     def get(self, request):
