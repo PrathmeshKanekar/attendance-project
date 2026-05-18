@@ -55,6 +55,7 @@ dependencies:
   pdf: ^3.12.0
   excel: ^4.0.6
   share_plus: ^12.0.2
+  flutter_unity_widget: ^2022.2.1
 
 dev_dependencies:
   flutter_test:

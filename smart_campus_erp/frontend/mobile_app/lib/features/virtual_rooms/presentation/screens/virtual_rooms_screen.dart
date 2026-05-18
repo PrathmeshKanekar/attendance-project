@@ -1,247 +1,298 @@
-// presentation/screens/virtual_rooms_screen.dart
-// ─────────────────────────────────────────────────────────────────────────────
-// Displays college room listings with premium enterprise light theme elements.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-
-import '../../../../core/constants/app_colors.dart';
 import '../../../../core/layout/app_layout.dart';
-import '../../data/models/virtual_room_model.dart';
-import '../providers/virtual_room_providers.dart';
+import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/loading_widget.dart';
+import '../../../../core/widgets/error_widget.dart';
+import '../../../../core/widgets/empty_state_widget.dart';
+import '../../../../core/providers/auth_provider.dart';
+import '../../models/virtual_room_model.dart';
+import '../../providers/virtual_room_providers.dart';
 
 class VirtualRoomsScreen extends ConsumerWidget {
   const VirtualRoomsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final roomsAsync = ref.watch(virtualRoomsProvider);
+    final listAsync = ref.watch(virtualRoomsListProvider);
+    final authState = ref.watch(authProvider);
+    
+    final isLabAssistant = authState is AuthSuccess && authState.user.role == 'lab_assistant';
 
     return AppLayout(
-      title: 'Virtual Classrooms',
+      title: 'Virtual Rooms',
       actions: [
         IconButton(
-          icon: const Icon(Icons.refresh_rounded, color: AppColors.primary),
-          onPressed: () => ref.refresh(virtualRoomsProvider),
+          icon: const Icon(Icons.refresh_rounded),
+          onPressed: () {
+            ref.read(virtualRoomsListProvider.notifier).loadRooms();
+          },
+          tooltip: 'Refresh',
         ),
       ],
-      fab: FloatingActionButton.extended(
-        onPressed: () => context.push('/virtual-rooms/add'),
-        icon: const Icon(Icons.add_location_alt_rounded, color: Colors.white),
-        label: const Text('New Spatial Room', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        backgroundColor: AppColors.primary,
-        elevation: 6,
-      ),
-      child: Container(
-        color: AppColors.bgPrimary,
-        child: roomsAsync.when(
-          data: (rooms) {
-            if (rooms.isEmpty) {
-              return _buildEmptyState(context);
-            }
-            return RefreshIndicator(
-              onRefresh: () async => ref.refresh(virtualRoomsProvider),
-              color: AppColors.primary,
-              backgroundColor: Colors.white,
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                itemCount: rooms.length,
-                itemBuilder: (context, index) {
-                  final room = rooms[index];
-                  return _RoomCard(room: room);
-                },
-              ),
-            );
+      fab: isLabAssistant
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                context.push('/virtual-rooms/add');
+              },
+              icon: const Icon(Icons.add_location_alt_rounded),
+              label: const Text('New Room'),
+              backgroundColor: AppColors.primaryLight,
+            )
+          : null,
+      child: listAsync.when(
+        loading: () => const LoadingWidget(message: 'Loading virtual rooms...'),
+        error: (e, _) => AppErrorWidget(
+          message: 'Error: ${e.toString()}',
+          onRetry: () {
+            ref.read(virtualRoomsListProvider.notifier).loadRooms();
           },
-          loading: () => const Center(
-            child: CircularProgressIndicator(color: AppColors.primary),
-          ),
-          error: (err, stack) => _buildErrorState(err.toString(), ref),
         ),
+        data: (rooms) {
+          if (rooms.isEmpty) {
+            return EmptyStateWidget(
+              message: 'No Virtual Rooms',
+              icon: Icons.room_preferences_rounded,
+              subtitle: isLabAssistant
+                  ? 'Tap the button below to capture and create your first geofenced virtual room.'
+                  : 'No geofenced classrooms have been registered yet by lab assistants.',
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: rooms.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final room = rooms[index];
+              return _RoomCard(
+                room: room,
+                showActions: isLabAssistant,
+                onTap: () {
+                  context.push('/virtual-rooms/${room.id}');
+                },
+                onEdit: () {
+                  context.push(
+                    '/virtual-rooms/${room.id}/edit',
+                    extra: room.toJson(),
+                  );
+                },
+                onDelete: () {
+                  _confirmDelete(context, ref, room);
+                },
+              );
+            },
+          );
+        },
       ),
     );
   }
 
-  Widget _buildEmptyState(BuildContext context) {
-    return Center(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(32.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.spatial_tracking_rounded, size: 80, color: AppColors.textSecondary.withOpacity(0.3)),
-              const SizedBox(height: 24),
-              const Text(
-                'No Spatial Footprints Registered',
-                style: TextStyle(color: AppColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'High-accuracy 3D geofences prevent location spoofing. Register a room to get started.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
-              ),
-              const SizedBox(height: 32),
-              ElevatedButton.icon(
-                onPressed: () => context.push('/virtual-rooms/add'),
-                icon: const Icon(Icons.add_location_alt_rounded, color: Colors.white),
-                label: const Text('CREATE SPATIAL ROOM', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ],
-          ),
+  void _confirmDelete(BuildContext context, WidgetRef ref, VirtualRoomModel room) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Virtual Room'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Text(
+          'Are you sure you want to delete "${room.name}"? '
+          'This will permanently remove the GPS boundaries and cannot be undone.',
         ),
-      ),
-    );
-  }
-
-  Widget _buildErrorState(String error, WidgetRef ref) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline_rounded, size: 50, color: AppColors.danger),
-            const SizedBox(height: 16),
-            const Text('Failed to load classrooms', style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(error, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () => ref.refresh(virtualRoomsProvider),
-              child: const Text('RETRY'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              minimumSize: const Size(90, 44),
             ),
-          ],
-        ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await ref.read(virtualRoomsListProvider.notifier).deleteRoom(room.id);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Virtual Room deleted successfully.'),
+                      backgroundColor: AppColors.success,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to delete room: $e'),
+                      backgroundColor: AppColors.danger,
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _RoomCard extends StatelessWidget {
-  final VirtualRoom room;
-  const _RoomCard({required this.room});
+  final VirtualRoomModel room;
+  final bool showActions;
+  final VoidCallback onTap;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  const _RoomCard({
+    required this.room,
+    required this.showActions,
+    required this.onTap,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final hasPolygon = room.hasPolygon;
-
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        color: AppColors.cardBg,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.borderColor),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
         child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: () => context.push('/virtual-rooms/${room.id}'),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
           child: Padding(
-            padding: const EdgeInsets.all(18.0),
-            child: Column(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
+                // Clean left room icon container
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: room.hasPolygon
+                        ? AppColors.success.withOpacity(0.1)
+                        : AppColors.textSecondary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    room.hasPolygon
+                        ? Icons.map_rounded
+                        : Icons.location_off_rounded,
+                    color: room.hasPolygon ? AppColors.success : AppColors.textSecondary,
+                    size: 26,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
                         room.name,
-                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
-                    ),
-                    _buildGeoFenceBadge(hasPolygon),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Icon(Icons.business, size: 14, color: AppColors.textSecondary),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${room.building} (Floor ${room.floorNumber})',
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                    ),
-                    const Spacer(),
-                    const Icon(Icons.people_outline, size: 14, color: AppColors.textSecondary),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Cap: ${room.capacity}',
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                    ),
-                  ],
-                ),
-                const Divider(height: 24, color: AppColors.borderColor),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      room.department.toUpperCase(),
-                      style: const TextStyle(
-                        color: AppColors.primary,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.0,
+                      const SizedBox(height: 6),
+                      Text(
+                        '${room.building} · Floor ${room.floorNumber}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                        ),
                       ),
-                    ),
-                    Row(
-                      children: [
-                        if (hasPolygon) ...[
-                          IconButton(
-                            icon: const Icon(Icons.spatial_audio_off_rounded, size: 18, color: AppColors.primary),
-                            onPressed: () => context.push('/virtual-rooms/${room.id}/preview'),
-                            tooltip: 'Preview Spatial Vector Frame',
+                      const SizedBox(height: 4),
+                      Text(
+                        'Capacity: ${room.capacity} students · Dept: ${room.department}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Gorgeous status tags
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: room.hasPolygon
+                                  ? AppColors.success.withOpacity(0.12)
+                                  : AppColors.danger.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              room.hasPolygon ? '✓ GEOCONTAINED' : '⚠️ NO BOUNDARY',
+                              style: TextStyle(
+                                color: room.hasPolygon ? AppColors.success : AppColors.danger,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                           const SizedBox(width: 8),
+                          if (room.hasPolygon)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryLight.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                '4 Corners',
+                                style: TextStyle(
+                                  color: AppColors.primaryLight,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
                         ],
-                        const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AppColors.textSecondary),
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
+                // Edit/Delete actions list
+                if (showActions)
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, color: AppColors.textSecondary, size: 20),
+                        onPressed: onEdit,
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Edit Room',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline_rounded, color: AppColors.danger, size: 20),
+                        onPressed: onDelete,
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Delete Room',
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildGeoFenceBadge(bool hasPolygon) {
-    final color = hasPolygon ? AppColors.success : AppColors.warning;
-    final label = hasPolygon ? '3D POLYGON' : '2D RADIUS';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(hasPolygon ? Icons.polyline_rounded : Icons.radar_rounded, size: 10, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-          ),
-        ],
       ),
     );
   }
