@@ -33,6 +33,7 @@ dependencies:
   # Location
   geolocator: ^14.0.2
   permission_handler: ^11.3.1
+  location: ^6.0.0
 
   # Device info
   device_info_plus: ^10.1.0

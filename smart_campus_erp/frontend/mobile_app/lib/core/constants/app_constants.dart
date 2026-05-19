@@ -5,8 +5,9 @@ class AppConstants {
   static const String refreshKey = 'refresh_token';
   static const String userKey    = 'user_data';
 
-  static const int connectTimeoutMs = 10000;
-  static const int receiveTimeoutMs = 10000;
+  static const int connectTimeoutMs = 30000;
+  static const int receiveTimeoutMs = 30000;
+  static const int sendTimeoutMs    = 30000;
 
   static const int    requiredBlinks        = 3;
   static const double faceMatchConfidence   = 60.0;

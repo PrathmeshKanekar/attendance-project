@@ -10,7 +10,6 @@ class RoomCornerSerializer(serializers.ModelSerializer):
             'altitude', 'heading', 'accuracy'
         ]
 
-
 class VirtualRoomSerializer(serializers.ModelSerializer):
     corners = RoomCornerSerializer(many=True, read_only=True)
     created_by_name = serializers.SerializerMethodField(read_only=True)
@@ -20,7 +19,6 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
     corner_coordinates = serializers.ListField(
         child=serializers.DictField(),
         required=False,
-        write_only=True,
         allow_empty=True
     )
 
@@ -32,12 +30,19 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
             'created_by', 'created_by_name', 'created_at', 'is_active',
             'corners', 'corner_coordinates', 'has_polygon'
         ]
-        read_only_fields = ['id', 'created_by', 'created_at']
+        read_only_fields = ['id', 'college', 'created_by', 'created_at']
 
     def get_created_by_name(self, obj):
         if obj.created_by:
             return f"{obj.created_by.first_name} {obj.created_by.last_name}".strip() or obj.created_by.username
         return "Unknown"
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if 'college' not in attrs and hasattr(request.user, 'college'):
+                attrs['college'] = request.user.college
+        return attrs
 
     def validate_corner_coordinates(self, value):
         if not value:
@@ -46,6 +51,7 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
         if len(value) != 4:
             raise serializers.ValidationError("Exactly 4 corners must be provided.")
             
+        seen_coordinates = set()
         for idx, corner in enumerate(value):
             lat = corner.get('lat') or corner.get('latitude')
             lng = corner.get('lng') or corner.get('longitude')
@@ -64,11 +70,25 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
                 
             if not (-180.0 <= flng <= 180.0):
                 raise serializers.ValidationError(f"Corner {idx + 1} longitude must be between -180 and 180.")
-                
+
+            # Unique coordinate validation
+            coord_key = (round(flat, 4), round(flng, 4))  # 4dp ~11m tolerance
+            if coord_key in seen_coordinates:
+                raise serializers.ValidationError(f"Duplicate coordinates detected. Corner {idx + 1} is too close to another corner.")
+            seen_coordinates.add(coord_key)
+            
         return value
 
     def create(self, validated_data):
         corner_data = validated_data.pop('corner_coordinates', None)
+        # Auto-assign requesting user if authenticated and not explicitly set
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            validated_data['created_by'] = request.user
+            # Auto-assign college from user profile if not provided
+            if 'college' not in validated_data and hasattr(request.user, 'college'):
+                validated_data['college'] = request.user.college
+
         room = VirtualRoom.objects.create(**validated_data)
         
         if corner_data:
@@ -95,7 +115,7 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
             lng = float(c.get('lng') or c.get('longitude') or 0.0)
             alt = float(c.get('alt') or c.get('altitude') or 0.0)
             heading = float(c.get('heading') or 0.0)
-            accuracy = float(c.get('accuracy') or 0.0)
+            accuracy = float(c.get('accuracy') or c.get('accuracy_meters') or 0.0)
             
             corner = RoomCorner.objects.create(
                 room=room,
@@ -104,7 +124,7 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
                 longitude=lng,
                 altitude=alt,
                 heading=heading,
-                accuracy=accuracy
+                accuracy=accuracy,
             )
             corners_list.append(corner)
             

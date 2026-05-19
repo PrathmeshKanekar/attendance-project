@@ -1,21 +1,18 @@
 from rest_framework import permissions
 
-class IsCollegeAdminOrStaff(permissions.BasePermission):
+class IsLabAssistantOrReadOnly(permissions.BasePermission):
     """
-    Role Restriction:
-    - ONLY users with role: lab_assistant can create, edit, or delete virtual rooms.
-    - Teachers, Principals, College Admins, Students MUST NOT create or modify virtual rooms.
-    - Safe methods (GET, HEAD, OPTIONS) are available to authorized academic roles.
+    Custom permission to only allow Lab Assistants to create, update, or delete virtual rooms.
+    All other authenticated users can read virtual rooms.
     """
     def has_permission(self, request, view):
+        # Must be authenticated
         if not request.user or not request.user.is_authenticated:
             return False
-            
-        role = getattr(request.user, 'role', '')
-        
-        # Read requests are allowed for all academic staff/students to marked attendance correctly
+
+        # Read permissions are allowed to any authenticated user (e.g. for listing/viewing)
         if request.method in permissions.SAFE_METHODS:
-            return role in {'lab_assistant', 'super_admin', 'college_admin', 'teacher', 'principal', 'hod', 'student'}
-            
-        # Write operations are strictly restricted to lab_assistant only
-        return role == 'lab_assistant'
+            return True
+
+        # Write permissions (POST, PUT, PATCH, DELETE) are ONLY allowed to lab_assistant
+        return getattr(request.user, 'role', '') == 'lab_assistant'
