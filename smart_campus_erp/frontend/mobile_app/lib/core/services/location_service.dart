@@ -1,3 +1,4 @@
+import 'package:location/location.dart' as loc;
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 
@@ -19,21 +20,29 @@ class LocationException implements Exception {
 }
 
 class LocationService {
-  Future<Position> getCurrentPosition() async {
+  final loc.Location _location = loc.Location();
+
+  Future<Position> getCurrentPosition({
+    LocationAccuracy desiredAccuracy = LocationAccuracy.bestForNavigation,
+    Duration timeLimit = const Duration(seconds: 30),
+  }) async {
     // 1. Check if location services are enabled.
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    bool serviceEnabled = await _location.serviceEnabled();
     if (!serviceEnabled) {
-      throw LocationException(
-        'Location services are disabled. Please enable them in settings.',
-        isServiceDisabled: true,
-      );
+      serviceEnabled = await _location.requestService();
+      if (!serviceEnabled) {
+        throw LocationException(
+          'Location services are disabled. Please enable them in settings.',
+          isServiceDisabled: true,
+        );
+      }
     }
 
     // 2. Check and request permissions.
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
+    loc.PermissionStatus permissionGranted = await _location.hasPermission();
+    if (permissionGranted == loc.PermissionStatus.denied) {
+      permissionGranted = await _location.requestPermission();
+      if (permissionGranted != loc.PermissionStatus.granted) {
         throw LocationException(
           'Location permissions are denied. We need them to verify your presence.',
           isPermissionDenied: true,
@@ -41,32 +50,39 @@ class LocationService {
       }
     }
 
-    if (permission == LocationPermission.deniedForever) {
+    if (permissionGranted == loc.PermissionStatus.deniedForever) {
       throw LocationException(
         'Location permissions are permanently denied. Please enable them in app settings.',
         isPermissionPermanentlyDenied: true,
       );
     }
 
-    // 3. Get the current position with timeout and fallback.
+    // 3. Configure Location settings to map to PRIORITY_HIGH_ACCURACY (Fuses WiFi, sensors, GPS)
+    await _location.changeSettings(
+      accuracy: loc.LocationAccuracy.high,
+      interval: 1000,
+      distanceFilter: 0,
+    );
+
+    // 4. Get the current Fused position.
     try {
-      // Try to get high accuracy position first with a reasonable timeout.
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 15),
-      );
-    } on TimeoutException {
-      // If high accuracy fails, try to get last known location or a less accurate one quickly.
-      final lastKnown = await Geolocator.getLastKnownPosition();
-      if (lastKnown != null) return lastKnown;
-      
-      // Fallback to lower accuracy if best accuracy times out.
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 10),
+      final locationData = await _location.getLocation().timeout(timeLimit);
+      return Position(
+        longitude: locationData.longitude ?? 0.0,
+        latitude: locationData.latitude ?? 0.0,
+        timestamp: DateTime.now(),
+        accuracy: locationData.accuracy ?? 0.0,
+        altitude: locationData.altitude ?? 0.0,
+        heading: locationData.heading ?? 0.0,
+        speed: locationData.speed ?? 0.0,
+        speedAccuracy: locationData.speedAccuracy ?? 0.0,
+        altitudeAccuracy: 0.0,
+        headingAccuracy: 0.0,
+        floor: null,
+        isMocked: false,
       );
     } catch (e) {
-      throw LocationException('Failed to acquire GPS lock: $e');
+      throw LocationException('Failed to acquire Fused GPS lock: $e');
     }
   }
 

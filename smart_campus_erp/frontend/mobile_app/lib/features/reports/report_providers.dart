@@ -17,10 +17,13 @@ final studentMyAttendanceProvider =
     return List<Map<String, dynamic>>.from(
       (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
     );
-  } else if (res.data is Map && res.data['subjects'] != null) {
-    return List<Map<String, dynamic>>.from(
-      (res.data['subjects'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
-    );
+  } else if (res.data is Map) {
+    final list = res.data['data'] ?? res.data['subjects'] ?? [];
+    if (list is List) {
+      return List<Map<String, dynamic>>.from(
+        list.map((e) => Map<String, dynamic>.from(e as Map)),
+      );
+    }
   }
   return [];
 });
@@ -33,7 +36,11 @@ final collegeOverviewProvider =
 
   final api = ref.read(apiClientProvider);
   final res = await api.get('/api/reports/college/overview/');
-  return Map<String, dynamic>.from(res.data as Map);
+  if (res.data is Map) {
+    final map = res.data['data'] ?? res.data;
+    return Map<String, dynamic>.from(map as Map);
+  }
+  return {};
 });
 
 // ── Teacher session history ────────────────────────────────
@@ -55,10 +62,13 @@ final teacherSessionHistoryProvider =
       return List<Map<String, dynamic>>.from(
         (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)),
       );
-    } else if (res.data is Map && res.data['results'] != null) {
-      return List<Map<String, dynamic>>.from(
-        (res.data['results'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
-      );
+    } else if (res.data is Map) {
+      final list = res.data['data'] ?? res.data['results'] ?? [];
+      if (list is List) {
+        return List<Map<String, dynamic>>.from(
+          list.map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+      }
     }
     return [];
   },
@@ -74,7 +84,11 @@ final attendanceSummaryProvider =
     final api = ref.read(apiClientProvider);
     final res = await api.get('/api/reports/attendance-summary/',
         params: params);
-    return Map<String, dynamic>.from(res.data as Map);
+    if (res.data is Map) {
+      final map = res.data['data'] ?? res.data;
+      return Map<String, dynamic>.from(map as Map);
+    }
+    return {};
   },
 );
 
@@ -87,6 +101,11 @@ final defaultersProvider =
 
     final api = ref.read(apiClientProvider);
     final res = await api.get('/api/reports/defaulters/', params: params);
-    return Map<String, dynamic>.from(res.data as Map);
+    if (res.data is Map) {
+      final map = res.data['data'] ?? res.data;
+      return Map<String, dynamic>.from(map as Map);
+    }
+    return {};
   },
 );
+

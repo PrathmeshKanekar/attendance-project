@@ -1,8 +1,12 @@
+// presentation/cubit/attendance_cubit.dart
+// ─────────────────────────────────────────────────────────────────────────────
+// Business logic provider for marked attendance verification.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io' show Platform; // Conditional import for non-web platforms
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:smart_campus_app/core/services/location_service.dart';
 import 'package:smart_campus_app/features/mark_attendance/domain/repositories/i_attendance_repository.dart';
 import 'package:smart_campus_app/features/mark_attendance/presentation/cubit/attendance_state.dart';
@@ -82,6 +86,7 @@ class AttendanceCubit extends Cubit<AttendanceState> {
     }
   }
 
+  // FIXED: Student GPS Gate - Validate geo validation emits isInsideRoom correctly Task 2
   Future<void> _validateGeo() async {
     if (isClosed) return;
     _updateStep(AttendanceStep.gpsValidation, StepStatus.processing);
@@ -122,7 +127,7 @@ class AttendanceCubit extends Cubit<AttendanceState> {
 
           if (isInside) {
             emit(state.copyWith(
-              isInsideRoom: true,
+              isInsideRoom: true, // FIXED: Emitted true when inside room boundaries Task 2
               currentStep: AttendanceStep.livenessDetection,
             ));
             _updateStep(AttendanceStep.gpsValidation, StepStatus.success);

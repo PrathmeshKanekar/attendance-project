@@ -169,25 +169,29 @@ class AttendanceSummaryView(APIView):
         )
 
         return Response({
-            'allocation': {
-                'id'          : str(allocation.id),
-                'subject_name': allocation.subject.name,
-                'subject_code': allocation.subject.code,
-                'division'    : allocation.division.name,
-                'year'        : allocation.division.year_of_study,
-                'teacher'     : allocation.teacher.get_full_name(),
+            'success': True,
+            'data': {
+                'allocation': {
+                    'id'          : str(allocation.id),
+                    'subject_name': allocation.subject.name,
+                    'subject_code': allocation.subject.code,
+                    'division'    : allocation.division.name,
+                    'year'        : allocation.division.year_of_study,
+                    'teacher'     : allocation.teacher.get_full_name(),
+                },
+                'date_range'      : {
+                    'start': str(start), 'end': str(end),
+                },
+                'summary': {
+                    'total_students'  : len(data),
+                    'below_threshold' : len(below_threshold),
+                    'above_threshold' : len(data) - len(below_threshold),
+                    'average_percentage': avg_pct,
+                    'threshold'       : threshold,
+                },
+                'students': data,
             },
-            'date_range'      : {
-                'start': str(start), 'end': str(end),
-            },
-            'summary': {
-                'total_students'  : len(data),
-                'below_threshold' : len(below_threshold),
-                'above_threshold' : len(data) - len(below_threshold),
-                'average_percentage': avg_pct,
-                'threshold'       : threshold,
-            },
-            'students': data,
+            'message': 'Reports fetched successfully'
         })
 
 
@@ -232,10 +236,14 @@ class DefaultersView(APIView):
 
             defaulters = [r for r in data if r['percentage'] < threshold]
             return Response({
-                'subject_name': allocation.subject.name,
-                'threshold'   : threshold,
-                'count'       : len(defaulters),
-                'defaulters'  : defaulters,
+                'success': True,
+                'data': {
+                    'subject_name': allocation.subject.name,
+                    'threshold'   : threshold,
+                    'count'       : len(defaulters),
+                    'defaulters'  : defaulters,
+                },
+                'message': 'Reports fetched successfully'
             })
         else:
             # All allocations for this college/HOD
@@ -262,9 +270,13 @@ class DefaultersView(APIView):
 
             all_defaulters.sort(key=lambda x: x['percentage'])
             return Response({
-                'threshold' : threshold,
-                'count'     : len(all_defaulters),
-                'defaulters': all_defaulters,
+                'success': True,
+                'data': {
+                    'threshold' : threshold,
+                    'count'     : len(all_defaulters),
+                    'defaulters': all_defaulters,
+                },
+                'message': 'Reports fetched successfully'
             })
 
 
@@ -498,7 +510,11 @@ class StudentMyAttendanceView(APIView):
             })
 
         result.sort(key=lambda x: x['subject_name'])
-        return Response(result)
+        return Response({
+            'success': True,
+            'data': result,
+            'message': 'Reports fetched successfully'
+        })
 
 
 # ══════════════════════════════════════════════════════════
@@ -548,7 +564,11 @@ class TeacherSessionHistoryView(APIView):
             for s in qs
         ]
 
-        return Response(data)
+        return Response({
+            'success': True,
+            'data': data,
+            'message': 'Reports fetched successfully'
+        })
 
 
 # ══════════════════════════════════════════════════════════
@@ -610,17 +630,21 @@ class CollegeOverviewView(APIView):
         subjects_data.sort(key=lambda x: x['avg_percentage'])
 
         return Response({
-            'date_range': {'start': str(start), 'end': str(end)},
-            'overview'  : {
-                'total_subjects'   : len(subjects_data),
-                'total_students'   : len(total_students_set),
-                'total_at_risk'    : len(total_at_risk_set),
-                'college_avg_pct'  : round(
-                    sum(s['avg_percentage'] for s in subjects_data)
-                    / len(subjects_data), 1
-                ) if subjects_data else 0.0,
+            'success': True,
+            'data': {
+                'date_range': {'start': str(start), 'end': str(end)},
+                'overview'  : {
+                    'total_subjects'   : len(subjects_data),
+                    'total_students'   : len(total_students_set),
+                    'total_at_risk'    : len(total_at_risk_set),
+                    'college_avg_pct'  : round(
+                        sum(s['avg_percentage'] for s in subjects_data)
+                        / len(subjects_data), 1
+                    ) if subjects_data else 0.0,
+                },
+                'subjects': subjects_data,
             },
-            'subjects': subjects_data,
+            'message': 'Reports fetched successfully'
         })
 
 
@@ -664,11 +688,40 @@ class DashboardSummaryView(APIView):
             if results:
                 avg_pct = round(sum(results) / len(results), 1)
 
+        active_students = StudentProfile.objects.filter(college=college).count() if college else 0
+        at_risk_count = 0 # Placeholder for more complex logic
+        
+        summary_data = [
+            {
+                'title': 'Total Sessions',
+                'value': str(total_sessions),
+                'trend': 0.0,
+                'is_positive': True,
+            },
+            {
+                'title': 'Average Attendance',
+                'value': f'{avg_pct}%',
+                'trend': 0.0,
+                'is_positive': True,
+            },
+            {
+                'title': 'Active Students',
+                'value': str(active_students),
+                'trend': 0.0,
+                'is_positive': True,
+            },
+            {
+                'title': 'At Risk Students',
+                'value': str(at_risk_count),
+                'trend': 0.0,
+                'is_positive': False,
+            }
+        ]
+
         return Response({
-            'total_sessions': total_sessions,
-            'average_attendance': avg_pct,
-            'active_students': StudentProfile.objects.filter(college=college).count() if college else 0,
-            'at_risk_count': 0, # Placeholder for more complex logic
+            'success': True,
+            'data': summary_data,
+            'message': 'Reports fetched successfully'
         })
 
 
@@ -723,4 +776,8 @@ class AttendanceTrendsView(APIView):
                 'total': vals['total'],
             })
 
-        return Response(data)
+        return Response({
+            'success': True,
+            'data': data,
+            'message': 'Reports fetched successfully'
+        })

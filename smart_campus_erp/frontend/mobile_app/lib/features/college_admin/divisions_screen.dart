@@ -38,33 +38,7 @@ class DivisionsScreen extends ConsumerWidget {
       ],
       fab: isLabAssistant ? FloatingActionButton.extended(
         onPressed : () {
-          try {
-            _showDivisionDialog(
-              context,
-              ref,
-              departmentsAsync.value ?? [],
-              coursesAsync.value ?? [],
-              academicYearsAsync.value ?? [],
-              null,
-            );
-          } on DioException catch (e) {
-            if (e.response?.statusCode == 403 && context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Permission denied: You cannot access course data.')),
-              );
-              return;
-            }
-            rethrow;
-          } catch (e) {
-             _showDivisionDialog(
-               context,
-               ref,
-               departmentsAsync.value ?? [],
-               coursesAsync.value ?? [],
-               academicYearsAsync.value ?? [],
-               null,
-             );
-          }
+          _showDivisionDialog(context, ref, null);
         },
         icon      : const Icon(Icons.add),
         label     : const Text('Add Division'),
@@ -109,33 +83,7 @@ class DivisionsScreen extends ConsumerWidget {
                 division: d,
                 showActions: isLabAssistant,
                 onEdit : () {
-                  try {
-                    _showDivisionDialog(
-                      context,
-                      ref,
-                      departmentsAsync.value ?? [],
-                      coursesAsync.value ?? [],
-                      academicYearsAsync.value ?? [],
-                      d,
-                    );
-                  } on DioException catch (e) {
-                    if (e.response?.statusCode == 403 && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Permission denied: You cannot access course data.')),
-                      );
-                      return;
-                    }
-                    rethrow;
-                  } catch (e) {
-                     _showDivisionDialog(
-                       context,
-                       ref,
-                       departmentsAsync.value ?? [],
-                       coursesAsync.value ?? [],
-                       academicYearsAsync.value ?? [],
-                       d,
-                     );
-                  }
+                  _showDivisionDialog(context, ref, d);
                 },
                 onDelete: () => _confirmDelete(context, ref, d),
               );
@@ -149,9 +97,6 @@ class DivisionsScreen extends ConsumerWidget {
   void _showDivisionDialog(
     BuildContext context,
     WidgetRef    ref,
-    List<Map<String, dynamic>> departments,
-    List<Map<String, dynamic>> courses,
-    List<Map<String, dynamic>> years,
     Map<String, dynamic>? division,
   ) {
     final nameCtrl = TextEditingController(text: division?['name'] ?? '');
@@ -176,195 +121,245 @@ class DivisionsScreen extends ConsumerWidget {
       }
     }
 
-    // Auto-resolve initial department from the selected course if editing
-    final initialCourse = courses.firstWhere(
-      (c) => c['id'].toString() == selectedCourseId,
-      orElse: () => <String, dynamic>{},
-    );
-    String? selectedDeptId = initialCourse.isNotEmpty ? initialCourse['department']?.toString() : null;
-
+    String? selectedDeptId;
     int selectedYearOfStudy = division?['year_of_study'] ?? 1;
+    bool hasInitializedDept = false;
     final formKey  = GlobalKey<FormState>();
     final isEdit   = division != null;
 
     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) {
-          // Dynamic filtering of courses based on selected department
-          final filteredCourses = selectedDeptId != null
-              ? courses.where((c) => c['department']?.toString() == selectedDeptId).toList()
-              : <Map<String, dynamic>>[];
+      builder: (ctx) => Consumer(
+        builder: (context, ref, child) {
+          final departmentsAsync = ref.watch(departmentsProvider);
+          final coursesAsync = ref.watch(coursesProvider);
+          final academicYearsAsync = ref.watch(academicYearsProvider);
 
-          return AlertDialog(
-            title: Text(
-              isEdit ? 'Edit Division' : 'Add Division',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            content: SingleChildScrollView(
-              child: Form(
-                key : formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextFormField(
-                      controller : nameCtrl,
-                      decoration : const InputDecoration(
-                        labelText : 'Division Name',
-                        hintText  : 'e.g. A, B',
-                      ),
-                      validator  : (v) => (v == null || v.trim().isEmpty)
-                          ? 'Name is required' : null,
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      value: selectedDeptId,
-                      hint: const Text('Select Department'),
-                      items: departments.map((d) {
-                        return DropdownMenuItem<String>(
-                          value: d['id'].toString(),
-                          child: Text(d['name'] ?? ''),
-                        );
-                      }).toList(),
-                      onChanged: isEdit ? null : (v) {
-                        setState(() {
-                          selectedDeptId = v;
-                          selectedCourseId = null; // Reset course when department changes
-                        });
-                      },
-                      validator: (v) => v == null ? 'Department is required' : null,
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      value: selectedCourseId,
-                      hint: Text(selectedDeptId == null
-                          ? 'Select Department First'
-                          : 'Select Course'),
-                      items: filteredCourses.map((c) {
-                        return DropdownMenuItem<String>(
-                          value: c['id'].toString(),
-                          child: Text(c['name'] ?? ''),
-                        );
-                      }).toList(),
-                      onChanged: isEdit ? null : (v) => setState(() => selectedCourseId = v),
-                      validator: (v) => v == null ? 'Course is required' : null,
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      value: selectedYearId,
-                      hint: const Text('Select Academic Year'),
-                      items: years.map((y) {
-                        return DropdownMenuItem<String>(
-                          value: y['id'].toString(),
-                          child: Text(y['name'] ?? ''),
-                        );
-                      }).toList(),
-                      onChanged: isEdit ? null : (v) => setState(() => selectedYearId = v),
-                      validator: (v) => v == null ? 'Academic Year is required' : null,
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<int>(
-                      value: selectedYearOfStudy,
-                      decoration: const InputDecoration(labelText: 'Year of Study'),
-                      items: [1, 2, 3, 4].map((y) {
-                        return DropdownMenuItem<int>(
-                          value: y,
-                          child: Text('Year $y'),
-                        );
-                      }).toList(),
-                      onChanged: (v) => setState(() => selectedYearOfStudy = v ?? 1),
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: capacityCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Capacity',
-                      ),
-                      keyboardType: TextInputType.number,
-                      validator: (v) => (v == null || v.trim().isEmpty)
-                          ? 'Capacity is required' : null,
-                    ),
-                  ],
-                ),
+          return departmentsAsync.when(
+            loading: () => const AlertDialog(
+              content: SizedBox(
+                height: 100,
+                child: Center(child: CircularProgressIndicator()),
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child    : const Text('Cancel'),
-              ),
-              ElevatedButton(
-                style    : ElevatedButton.styleFrom(
-                  minimumSize: const Size(90, 44),
+            error: (e, _) => AlertDialog(
+              content: Text('Error loading departments: $e'),
+            ),
+            data: (departments) => coursesAsync.when(
+              loading: () => const AlertDialog(
+                content: SizedBox(
+                  height: 100,
+                  child: Center(child: CircularProgressIndicator()),
                 ),
-                onPressed: () async {
-                  if (!formKey.currentState!.validate()) return;
-                  Navigator.pop(ctx);
-
-                  final api  = ref.read(apiClientProvider);
-                  final body = {
-                    'name': nameCtrl.text.trim(),
-                    if (selectedCourseId != null) 'course': selectedCourseId,
-                    if (selectedYearId != null) 'academic_year': selectedYearId,
-                    'year_of_study': selectedYearOfStudy,
-                    'capacity': int.tryParse(capacityCtrl.text.trim()) ?? 60,
-                  };
-
-                  try {
-                    if (isEdit) {
-                      await api.put('/api/divisions/${division['id']}/', data: body);
-                    } else {
-                      await api.post('/api/divisions/', data: body);
+              ),
+              error: (e, _) => AlertDialog(
+                content: Text('Error loading courses: $e'),
+              ),
+              data: (courses) => academicYearsAsync.when(
+                loading: () => const AlertDialog(
+                  content: SizedBox(
+                    height: 100,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+                error: (e, _) => AlertDialog(
+                  content: Text('Error loading academic years: $e'),
+                ),
+                data: (years) {
+                  // Auto-resolve initial department from the selected course if editing
+                  if (!hasInitializedDept && courses.isNotEmpty) {
+                    final initialCourse = courses.firstWhere(
+                      (c) => c['id'].toString() == selectedCourseId,
+                      orElse: () => <String, dynamic>{},
+                    );
+                    if (initialCourse.isNotEmpty) {
+                      selectedDeptId = initialCourse['department']?.toString();
                     }
-                    ref.invalidate(divisionsProvider);
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            isEdit
-                                ? 'Division updated.'
-                                : 'Division created.',
-                          ),
-                          backgroundColor: AppColors.success,
-                        ),
-                      );
-                    }
-                  } on DioException catch (e) {
-                    if (e.response?.statusCode == 403 && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content        : Text('Only Lab Assistant can manage divisions.'),
-                          backgroundColor: AppColors.danger,
-                        ),
-                      );
-                      return;
-                    }
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content        : Text('Error: ${e.response?.data?["error"] ?? e.response?.data?["detail"] ?? e.message}'),
-                          backgroundColor: AppColors.danger,
-                        ),
-                      );
-                    }
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content        : Text('Error: $e'),
-                          backgroundColor: AppColors.danger,
-                        ),
-                      );
-                    }
+                    hasInitializedDept = true;
                   }
-              },
-              child: Text(isEdit ? 'Save' : 'Create'),
+
+                  return StatefulBuilder(
+                    builder: (context, setState) {
+                      // Dynamic filtering of courses based on selected department
+                      final filteredCourses = selectedDeptId != null
+                          ? courses.where((c) => c['department']?.toString() == selectedDeptId).toList()
+                          : <Map<String, dynamic>>[];
+
+                      return AlertDialog(
+                        title: Text(
+                          isEdit ? 'Edit Division' : 'Add Division',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        content: SingleChildScrollView(
+                          child: Form(
+                            key : formKey,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextFormField(
+                                  controller : nameCtrl,
+                                  decoration : const InputDecoration(
+                                    labelText : 'Division Name',
+                                    hintText  : 'e.g. A, B',
+                                  ),
+                                  validator  : (v) => (v == null || v.trim().isEmpty)
+                                      ? 'Name is required' : null,
+                                ),
+                                const SizedBox(height: 14),
+                                DropdownButtonFormField<String>(
+                                  value: selectedDeptId,
+                                  hint: const Text('Select Department'),
+                                  items: departments.map((d) {
+                                    return DropdownMenuItem<String>(
+                                      value: d['id'].toString(),
+                                      child: Text(d['name'] ?? ''),
+                                    );
+                                  }).toList(),
+                                  onChanged: isEdit ? null : (v) {
+                                    setState(() {
+                                      selectedDeptId = v;
+                                      selectedCourseId = null; // Reset course when department changes
+                                    });
+                                  },
+                                  validator: (v) => v == null ? 'Department is required' : null,
+                                ),
+                                const SizedBox(height: 14),
+                                DropdownButtonFormField<String>(
+                                  value: selectedCourseId,
+                                  hint: Text(selectedDeptId == null
+                                      ? 'Select Department First'
+                                      : 'Select Course'),
+                                  items: filteredCourses.map((c) {
+                                    return DropdownMenuItem<String>(
+                                      value: c['id'].toString(),
+                                      child: Text(c['name'] ?? ''),
+                                    );
+                                  }).toList(),
+                                  onChanged: isEdit ? null : (v) => setState(() => selectedCourseId = v),
+                                  validator: (v) => v == null ? 'Course is required' : null,
+                                ),
+                                const SizedBox(height: 14),
+                                DropdownButtonFormField<String>(
+                                  value: selectedYearId,
+                                  hint: const Text('Select Academic Year'),
+                                  items: years.map((y) {
+                                    return DropdownMenuItem<String>(
+                                      value: y['id'].toString(),
+                                      child: Text(y['name'] ?? ''),
+                                    );
+                                  }).toList(),
+                                  onChanged: isEdit ? null : (v) => setState(() => selectedYearId = v),
+                                  validator: (v) => v == null ? 'Academic Year is required' : null,
+                                ),
+                                const SizedBox(height: 14),
+                                DropdownButtonFormField<int>(
+                                  value: selectedYearOfStudy,
+                                  decoration: const InputDecoration(labelText: 'Year of Study'),
+                                  items: [1, 2, 3, 4].map((y) {
+                                    return DropdownMenuItem<int>(
+                                      value: y,
+                                      child: Text('Year $y'),
+                                    );
+                                  }).toList(),
+                                  onChanged: (v) => setState(() => selectedYearOfStudy = v ?? 1),
+                                ),
+                                const SizedBox(height: 14),
+                                TextFormField(
+                                  controller: capacityCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Capacity',
+                                  ),
+                                  keyboardType: TextInputType.number,
+                                  validator: (v) => (v == null || v.trim().isEmpty)
+                                      ? 'Capacity is required' : null,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child    : const Text('Cancel'),
+                          ),
+                          ElevatedButton(
+                            style    : ElevatedButton.styleFrom(
+                              minimumSize: const Size(90, 44),
+                            ),
+                            onPressed: () async {
+                              if (!formKey.currentState!.validate()) return;
+                              Navigator.pop(ctx);
+
+                              final api  = ref.read(apiClientProvider);
+                              final body = {
+                                'name': nameCtrl.text.trim(),
+                                if (selectedCourseId != null) 'course': selectedCourseId,
+                                if (selectedYearId != null) 'academic_year': selectedYearId,
+                                'year_of_study': selectedYearOfStudy,
+                                'capacity': int.tryParse(capacityCtrl.text.trim()) ?? 60,
+                              };
+
+                              try {
+                                if (isEdit) {
+                                  await api.put('/api/divisions/${division['id']}/', data: body);
+                                } else {
+                                  await api.post('/api/divisions/', data: body);
+                                }
+                                ref.invalidate(divisionsProvider);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        isEdit
+                                            ? 'Division updated.'
+                                            : 'Division created.',
+                                      ),
+                                      backgroundColor: AppColors.success,
+                                    ),
+                                  );
+                                }
+                              } on DioException catch (e) {
+                                if (e.response?.statusCode == 403 && context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content        : Text('Only Lab Assistant can manage divisions.'),
+                                      backgroundColor: AppColors.danger,
+                                    ),
+                                  );
+                                  return;
+                                }
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content        : Text('Error: ${e.response?.data?["error"] ?? e.response?.data?["detail"] ?? e.message}'),
+                                      backgroundColor: AppColors.danger,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content        : Text('Error: $e'),
+                                      backgroundColor: AppColors.danger,
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                            child: Text(isEdit ? 'Save' : 'Create'),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
             ),
-          ],
-        );
-      },
-    ),
+          );
+        },
+      ),
     );
   }
 

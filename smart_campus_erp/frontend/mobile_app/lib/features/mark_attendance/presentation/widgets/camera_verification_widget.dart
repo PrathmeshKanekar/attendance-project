@@ -1,3 +1,7 @@
+// presentation/widgets/camera_verification_widget.dart
+// ─────────────────────────────────────────────────────────────────────────────
+// Camera face recognition and liveness detection.
+// ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:async';
 import 'dart:io';
@@ -21,10 +25,11 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   CameraController? _controller;
   FaceDetector? _faceDetector;
   bool _isBusy = false;
+  
+  // FIXED: Liveness Scan Blink Bug - Synchronous Local Instance Tracking Task 3
   int _blinkCount = 0;
-  bool _eyesClosed = false;           // FIXED: unified closed state Task 3
+  bool _eyesClosed = false;           
   DateTime? _blinkStartTime;
-  static const _blinkCooldownMs = 500; // FIXED: prevent double-counting Task 3
 
   @override
   void initState() {
@@ -93,7 +98,6 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     final boundingBox = face.boundingBox;
     
     // 1. Check Face Size (Must be close enough)
-    // Face width should be at least 30% of image width
     final faceWidthRatio = boundingBox.width / image.width;
     if (faceWidthRatio < 0.3) {
       context.read<AttendanceCubit>().updateFaceGuidance("Move closer to camera", false);
@@ -104,7 +108,6 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     final centerX = boundingBox.center.dx;
     final centerY = boundingBox.center.dy;
     
-    // Relative position (0.0 to 1.0)
     final relX = centerX / image.width;
     final relY = centerY / image.height;
 
@@ -118,32 +121,29 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     return true;
   }
 
+  // FIXED: Liveness Scan Blink Bug - Synchronous Local Instance Tracking Task 3
   void _checkBlink(Face face) {
     final leftOpen  = face.leftEyeOpenProbability  ?? 1.0;
     final rightOpen = face.rightEyeOpenProbability ?? 1.0;
 
-    const closedThresh = 0.20;
-    const openThresh   = 0.55;
+    const closedThresh = 0.30; // slightly more tolerant
 
     final eitherClosed = leftOpen < closedThresh || rightOpen < closedThresh;
-    final bothOpen     = leftOpen > openThresh   && rightOpen > openThresh;
 
     if (eitherClosed && !_eyesClosed) {
       // Blink START — eyes just closed
       _eyesClosed     = true;
       _blinkStartTime = DateTime.now();
       debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
-    } else if (_eyesClosed && bothOpen) {
+    } else if (!eitherClosed && _eyesClosed) {
       // Blink END — eyes reopened
-      if (_blinkStartTime == null) {
-        _eyesClosed = false;
-        return;
-      }
+      _eyesClosed = false;
+      if (_blinkStartTime == null) return;
+      
       final elapsed = DateTime.now().difference(_blinkStartTime!).inMilliseconds;
 
-      // Valid blink: eyes were closed for at least 80ms (natural blink) and cooldown met
-      if (elapsed >= 80 && elapsed <= _blinkCooldownMs) {
-        _eyesClosed = false;
+      // Valid blink: eyes were closed for a reasonable amount of time
+      if (elapsed >= 50 && elapsed < 2000) {
         _blinkCount++;
         debugPrint("BLINK COUNTED: $_blinkCount (duration: ${elapsed}ms)");
 
@@ -152,8 +152,6 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
           context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
         }
       } else {
-        // Too fast or too slow — noise/artifact, reset without counting
-        _eyesClosed = false;
         debugPrint("BLINK IGNORED (duration: ${elapsed}ms)");
       }
     }
@@ -285,7 +283,10 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
             
-            if ((state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch) && state.isInsideRoom)
+            // FIXED: Student UI Button Gate - Button visible only when gpsValidation is success AND isInsideRoom is true Task 2
+            if ((state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch) &&
+                state.stepStatuses[AttendanceStep.gpsValidation] == StepStatus.success &&
+                state.isInsideRoom)
               Padding(
                 padding: const EdgeInsets.only(top: 24),
                 child: ElevatedButton(
