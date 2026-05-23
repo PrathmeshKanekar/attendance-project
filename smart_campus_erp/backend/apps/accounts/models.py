@@ -2,6 +2,12 @@ import uuid
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.db import models
 
+def normalize_device_id(device_id):
+    if not device_id:
+        return ""
+    return device_id.strip().lower().replace('-', '').replace(':', '')
+
+
 ROLE_CHOICES = [
     ('super_admin', 'Super Admin'),
     ('college_admin', 'College Admin'),
@@ -90,6 +96,9 @@ class User(AbstractBaseUser, PermissionsMixin):
             self.is_active = True
             self.is_approved = True
             
+        if self.device_id:
+            self.device_id = normalize_device_id(self.device_id)
+            
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -134,9 +143,12 @@ class DeviceRegistry(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='devices')
     device_id = models.CharField(max_length=255)
+    normalized_device_id = models.CharField(max_length=255, blank=True)
     device_name = models.CharField(max_length=255, blank=True)
     platform = models.CharField(max_length=20)  # android / ios
     is_active = models.BooleanField(default=True)
+    is_verified = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
     registered_at = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -147,3 +159,8 @@ class DeviceRegistry(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.device_id}"
+
+    def save(self, *args, **kwargs):
+        self.device_id = normalize_device_id(self.device_id)
+        self.normalized_device_id = normalize_device_id(self.device_id)
+        super().save(*args, **kwargs)

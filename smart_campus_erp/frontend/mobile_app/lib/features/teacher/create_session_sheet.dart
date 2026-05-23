@@ -269,10 +269,26 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
         }
       }
       
-      Position pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 15),
-      );
+      Position? pos;
+      try {
+        pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+          timeLimit: const Duration(seconds: 8),
+        );
+      } catch (_) {
+        try {
+          pos = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+            timeLimit: const Duration(seconds: 4),
+          );
+        } catch (_) {
+          pos = await Geolocator.getLastKnownPosition();
+        }
+      }
+
+      if (pos == null) {
+        throw 'Location acquisition timed out. Please ensure GPS is enabled and try again.';
+      }
 
       await ref.read(createSessionProvider.notifier).createSession({
         'subject_allocation_id': _selectedAllocation!['id'],

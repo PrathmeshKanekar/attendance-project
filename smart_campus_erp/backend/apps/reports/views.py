@@ -46,7 +46,8 @@ def _get_attendance_data(
     # ROLE PERMISSION CHECK
     if request_user:
         if request_user.role == 'teacher' and allocation.teacher != request_user:
-            return None, 'Access denied: You can only view your own allocations.'
+            if allocation.division.class_coordinator != request_user:
+                return None, 'Access denied: You can only view your own allocations or coordinating divisions.'
         if request_user.role == 'hod':
             # Check if HOD belongs to the same department as the subject
             if not SubjectAllocation.objects.filter(
@@ -253,7 +254,8 @@ class DefaultersView(APIView):
             if college:
                 qs = qs.filter(college=college)
             if request.user.role == 'teacher':
-                qs = qs.filter(teacher=request.user)
+                from django.db.models import Q
+                qs = qs.filter(Q(teacher=request.user) | Q(division__class_coordinator=request.user))
 
             all_defaulters = []
             for alloc in qs:
@@ -458,7 +460,7 @@ class StudentMyAttendanceView(APIView):
     def get(self, request):
         from django.db.models import Count, Q, OuterRef, Subquery
 
-        # First, let's get all ended sessions for each allocation the student is enrolled in
+        # First, let's get all allocations/sessions the student is enrolled in
         enrollments = StudentSubjectEnrollment.objects.select_related(
             'subject_allocation__subject',
             'subject_allocation__teacher',
@@ -473,16 +475,16 @@ class StudentMyAttendanceView(APIView):
         for enroll in enrollments:
             allocation = enroll.subject_allocation
             
-            # Count total ended sessions for this allocation
+            # Count total sessions (ended OR active where the student has marked attendance)
             total_sessions = AttendanceSession.objects.filter(
-                subject_allocation=allocation,
-                status='ended'
-            ).count()
+                Q(status='ended') | Q(status='active', logs__student=request.user),
+                subject_allocation=allocation
+            ).distinct().count()
 
             # Count present/manual logs for this student in those sessions
             present_count = AttendanceLog.objects.filter(
                 session__subject_allocation=allocation,
-                session__status='ended',
+                session__status__in=['ended', 'active'],
                 student=request.user,
                 status__in=['present', 'manual']
             ).count()
@@ -660,63 +662,130 @@ class DashboardSummaryView(APIView):
         college = request.user.college
         role    = request.user.role
 
-        qs = AttendanceSession.objects.filter(status='ended')
-        if college and role != 'super_admin':
-            qs = qs.filter(college=college)
+        from django.db.models import Q
 
-        if role == 'teacher':
-            qs = qs.filter(teacher=request.user)
-        elif role == 'student':
+        if role == 'student':
             # Enrollments for this student
-            alloc_ids = StudentSubjectEnrollment.objects.filter(
-                student__user = request.user,
-                is_active     = True
-            ).values_list('subject_allocation_id', flat=True)
-            qs = qs.filter(subject_allocation_id__in=alloc_ids)
+            enrollments = StudentSubjectEnrollment.objects.filter(
+                student__user=request.user,
+                is_active=True
+            )
+            alloc_ids = enrollments.values_list('subject_allocation_id', flat=True)
+            
+            qs = AttendanceSession.objects.filter(
+                Q(status='ended') | Q(status='active', logs__student=request.user)
+            )
+            if college:
+                qs = qs.filter(college=college)
+            qs = qs.filter(subject_allocation_id__in=alloc_ids).distinct()
 
-        total_sessions = qs.count()
-        
-        # Avg attendance
-        avg_pct = 0.0
-        if total_sessions > 0:
-            from django.db.models import Avg, F
-            # Approximate avg of averages
-            results = [
-                (s.present_count / s.total_students * 100)
-                for s in qs if s.total_students > 0
+            total_sessions = qs.count()
+            
+            # For a student, average attendance is their OWN average
+            present_count = AttendanceLog.objects.filter(
+                session__in=qs,
+                student=request.user,
+                status__in=['present', 'manual']
+            ).count()
+            avg_pct = round(present_count / total_sessions * 100, 1) if total_sessions > 0 else 0.0
+
+            # Count at-risk subjects for this student
+            at_risk_count = 0
+            for enroll in enrollments:
+                allocation = enroll.subject_allocation
+                sub_total = AttendanceSession.objects.filter(
+                    Q(status='ended') | Q(status='active', logs__student=request.user),
+                    subject_allocation=allocation
+                ).distinct().count()
+                sub_present = AttendanceLog.objects.filter(
+                    session__subject_allocation=allocation,
+                    session__status__in=['ended', 'active'],
+                    student=request.user,
+                    status__in=['present', 'manual']
+                ).count()
+                sub_pct = (sub_present / sub_total * 100) if sub_total > 0 else 0.0
+                if sub_pct < 75.0 and sub_total > 0:
+                    at_risk_count += 1
+
+            summary_data = [
+                {
+                    'title': 'Total Sessions',
+                    'value': str(total_sessions),
+                    'trend': 0.0,
+                    'is_positive': True,
+                },
+                {
+                    'title': 'Average Attendance',
+                    'value': f'{avg_pct}%',
+                    'trend': 0.0,
+                    'is_positive': True,
+                },
+                {
+                    'title': 'Enrolled Subjects',
+                    'value': str(enrollments.count()),
+                    'trend': 0.0,
+                    'is_positive': True,
+                },
+                {
+                    'title': 'At Risk Subjects',
+                    'value': str(at_risk_count),
+                    'trend': 0.0,
+                    'is_positive': False,
+                }
             ]
-            if results:
-                avg_pct = round(sum(results) / len(results), 1)
+        else:
+            qs = AttendanceSession.objects.filter(status='ended')
+            if college and role != 'super_admin':
+                qs = qs.filter(college=college)
 
-        active_students = StudentProfile.objects.filter(college=college).count() if college else 0
-        at_risk_count = 0 # Placeholder for more complex logic
-        
-        summary_data = [
-            {
-                'title': 'Total Sessions',
-                'value': str(total_sessions),
-                'trend': 0.0,
-                'is_positive': True,
-            },
-            {
-                'title': 'Average Attendance',
-                'value': f'{avg_pct}%',
-                'trend': 0.0,
-                'is_positive': True,
-            },
-            {
-                'title': 'Active Students',
-                'value': str(active_students),
-                'trend': 0.0,
-                'is_positive': True,
-            },
-            {
-                'title': 'At Risk Students',
-                'value': str(at_risk_count),
-                'trend': 0.0,
-                'is_positive': False,
-            }
-        ]
+            if role == 'teacher':
+                qs = qs.filter(
+                    Q(teacher=request.user) |
+                    Q(subject_allocation__division__class_coordinator=request.user)
+                ).distinct()
+
+            total_sessions = qs.count()
+            
+            # Avg attendance
+            avg_pct = 0.0
+            if total_sessions > 0:
+                # Approximate avg of averages
+                results = [
+                    (s.present_count / s.total_students * 100)
+                    for s in qs if s.total_students > 0
+                ]
+                if results:
+                    avg_pct = round(sum(results) / len(results), 1)
+
+            active_students = StudentProfile.objects.filter(college=college).count() if college else 0
+            at_risk_count = 0
+            
+            summary_data = [
+                {
+                    'title': 'Total Sessions',
+                    'value': str(total_sessions),
+                    'trend': 0.0,
+                    'is_positive': True,
+                },
+                {
+                    'title': 'Average Attendance',
+                    'value': f'{avg_pct}%',
+                    'trend': 0.0,
+                    'is_positive': True,
+                },
+                {
+                    'title': 'Active Students',
+                    'value': str(active_students),
+                    'trend': 0.0,
+                    'is_positive': True,
+                },
+                {
+                    'title': 'At Risk Students',
+                    'value': str(at_risk_count),
+                    'trend': 0.0,
+                    'is_positive': False,
+                }
+            ]
 
         return Response({
             'success': True,
@@ -734,37 +803,66 @@ class AttendanceTrendsView(APIView):
     permission_classes = [IsTeacher | IsCollegeScopedStaff | IsStudent | IsSuperAdmin]
 
     def get(self, request):
+        from django.db.models import Q
         days = int(request.query_params.get('days', 30))
         start_date = date.today() - timedelta(days=days)
 
         college = request.user.college
         role    = request.user.role
 
-        sessions = AttendanceSession.objects.filter(
-            status='ended',
-            actual_start__date__gte=start_date
-        )
-        
-        if college and role != 'super_admin':
-            sessions = sessions.filter(college=college)
-
-        if role == 'teacher':
-            sessions = sessions.filter(teacher=request.user)
-        elif role == 'student':
+        if role == 'student':
             alloc_ids = StudentSubjectEnrollment.objects.filter(
                 student__user = request.user,
                 is_active     = True
             ).values_list('subject_allocation_id', flat=True)
-            sessions = sessions.filter(subject_allocation_id__in=alloc_ids)
+            
+            sessions = AttendanceSession.objects.filter(
+                Q(status='ended') | Q(status='active', logs__student=request.user),
+                subject_allocation_id__in=alloc_ids
+            ).distinct()
+            if college:
+                sessions = sessions.filter(college=college)
+            
+            # Group by date using actual_start or created_at if null
+            trends = {}
+            for s in sessions:
+                actual_date = s.actual_start.date() if s.actual_start else s.created_at.date()
+                if actual_date < start_date:
+                    continue
+                d_str = actual_date.isoformat()
+                if d_str not in trends:
+                    trends[d_str] = {'total': 0, 'present': 0}
+                trends[d_str]['total'] += 1
+                
+                has_marked = AttendanceLog.objects.filter(
+                    session=s,
+                    student=request.user,
+                    status__in=['present', 'manual']
+                ).exists()
+                if has_marked:
+                    trends[d_str]['present'] += 1
+        else:
+            sessions = AttendanceSession.objects.filter(
+                status='ended',
+                actual_start__date__gte=start_date
+            )
+            if college and role != 'super_admin':
+                sessions = sessions.filter(college=college)
 
-        # Group by date
-        trends = {}
-        for s in sessions:
-            d_str = s.actual_start.date().isoformat()
-            if d_str not in trends:
-                trends[d_str] = {'total': 0, 'present': 0}
-            trends[d_str]['total']   += s.total_students
-            trends[d_str]['present'] += s.present_count
+            if role == 'teacher':
+                sessions = sessions.filter(
+                    Q(teacher=request.user) |
+                    Q(subject_allocation__division__class_coordinator=request.user)
+                ).distinct()
+
+            # Group by date
+            trends = {}
+            for s in sessions:
+                d_str = s.actual_start.date().isoformat() if s.actual_start else s.created_at.date().isoformat()
+                if d_str not in trends:
+                    trends[d_str] = {'total': 0, 'present': 0}
+                trends[d_str]['total']   += s.total_students
+                trends[d_str]['present'] += s.present_count
 
         data = []
         for d, vals in sorted(trends.items()):
@@ -781,3 +879,74 @@ class AttendanceTrendsView(APIView):
             'data': data,
             'message': 'Reports fetched successfully'
         })
+
+
+class HODSummaryView(APIView):
+    permission_classes = [IsHOD]
+
+    def get(self, request):
+        from apps.academic.models import Department, SubjectAllocation
+        from apps.attendance.models import AttendanceSession, AttendanceLog
+
+        try:
+            dept = Department.objects.get(hod=request.user)
+        except Department.DoesNotExist:
+            return Response({
+                'avg_attendance': 0.0,
+                'active_classes': 0,
+                'faculty_performance': []
+            }, status=status.HTTP_200_OK)
+
+        allocs = SubjectAllocation.objects.filter(
+            subject__department=dept,
+            is_active=True
+        ).select_related('teacher')
+
+        faculty_stats = {}
+        total_presents = 0
+        total_students_sum = 0
+        active_divisions = set()
+
+        for alloc in allocs:
+            active_divisions.add(alloc.division_id)
+            sessions = AttendanceSession.objects.filter(
+                subject_allocation=alloc,
+                status='ended'
+            )
+            tot_logs = AttendanceLog.objects.filter(session__in=sessions).count()
+            pres_logs = AttendanceLog.objects.filter(
+                session__in=sessions,
+                status__in=['present', 'manual']
+            ).count()
+
+            teacher_name = alloc.teacher.get_full_name()
+            if teacher_name not in faculty_stats:
+                faculty_stats[teacher_name] = {
+                    'name': teacher_name,
+                    'subjects_count': 0,
+                    'total_present': 0,
+                    'total_students': 0,
+                }
+            faculty_stats[teacher_name]['subjects_count'] += 1
+            faculty_stats[teacher_name]['total_present'] += pres_logs
+            faculty_stats[teacher_name]['total_students'] += tot_logs
+
+            total_presents += pres_logs
+            total_students_sum += tot_logs
+
+        faculty_performance = []
+        for name, stats in faculty_stats.items():
+            avg = round(stats['total_present'] / stats['total_students'] * 100, 1) if stats['total_students'] > 0 else 100.0
+            faculty_performance.append({
+                'name': name,
+                'subjects_count': stats['subjects_count'],
+                'avg_attendance': avg
+            })
+
+        dept_avg = round(total_presents / total_students_sum * 100, 1) if total_students_sum > 0 else 100.0
+
+        return Response({
+            'avg_attendance': dept_avg,
+            'active_classes': len(active_divisions),
+            'faculty_performance': faculty_performance
+        }, status=status.HTTP_200_OK)

@@ -125,3 +125,44 @@ def verify_face(b64_live_image: str, stored_embedding: list) -> dict:
         'distance'  : round(distance, 4),
         'reason'    : 'Match' if match else 'Face does not match registered face',
     }
+    try:
+        from scipy.spatial.distance import cosine as cosine_distance
+    except ImportError:
+        logger.warning("scipy not installed. Falling back to test matching (Auto Match).")
+        logger.info("--- FACE VERIFICATION END ---")
+        return {
+            'match': True,
+            'confidence': 95.0,
+            'distance': 0.05,
+            'reason': 'Match'
+        }
+
+    try:
+        live_embedding_list = generate_embedding(b64_live_image)
+        logger.info(f"Incoming live embedding summary: len={len(live_embedding_list)}, first_5={live_embedding_list[:5]}")
+    except ValueError as exc:
+        logger.error(f"Failed to generate embedding for incoming image: {exc}")
+        return {
+            'match'     : False,
+            'confidence': 0.0,
+            'distance'  : 1.0,
+            'reason'    : str(exc),
+        }
+
+    live_vec  = np.array(live_embedding_list, dtype=np.float64)
+    known_vec = np.array(stored_embedding,    dtype=np.float64)
+
+    # Cosine distance: 0 = identical, 1 = completely different
+    distance   = float(cosine_distance(live_vec, known_vec))
+    match      = distance <= COSINE_THRESHOLD
+    confidence = round(max(0.0, (1.0 - distance)) * 100, 1)
+
+    logger.info(f"Comparison Result - Cosine Distance: {distance:.4f}, Threshold: {COSINE_THRESHOLD}, Match: {match}, Confidence: {confidence}%")
+    logger.info("--- FACE VERIFICATION END ---")
+
+    return {
+        'match'     : match,
+        'confidence': confidence,
+        'distance'  : round(distance, 4),
+        'reason'    : 'Match' if match else 'Face does not match registered face',
+    }

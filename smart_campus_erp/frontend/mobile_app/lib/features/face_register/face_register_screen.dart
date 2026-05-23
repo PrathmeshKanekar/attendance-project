@@ -68,6 +68,7 @@ class _FaceRegisterScreenState extends ConsumerState<FaceRegisterScreen> {
     final api = ref.read(apiClientProvider);
 
     try {
+      debugPrint("Uploading face registration payload");
       await api.post('/api/face/register/', data: {
         'student_id': widget.student.id,
         'face_image_b64': b64,

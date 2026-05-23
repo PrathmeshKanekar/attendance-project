@@ -20,5 +20,29 @@ abstract class IAttendanceRepository {
     required int blinkCount,
     double? accuracy,
     Map<String, dynamic>? extraSensors,
+    bool isMocked = false,
+  });
+
+  Future<Either<String, bool>> logSecurityAlert({
+    required String type,
+    required double lat,
+    required double lng,
+    required String deviceId,
+  });
+
+  Future<Either<String, Map<String, dynamic>>> registerDevice({
+    required String deviceId,
+    required String deviceName,
+    required String platform,
+  });
+
+  Future<Either<String, Map<String, dynamic>>> verifyDevice({
+    required String deviceId,
+  });
+
+  Future<Either<String, Map<String, dynamic>>> refreshDeviceBinding({
+    required String deviceId,
+    required String deviceName,
+    required String platform,
   });
 }

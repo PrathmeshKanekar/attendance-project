@@ -37,6 +37,7 @@ dependencies:
 
   # Device info
   device_info_plus: ^10.1.0
+  flutter_jailbreak_detection: ^1.10.0
 
   # UI & Charts
   google_fonts: ^6.2.1
