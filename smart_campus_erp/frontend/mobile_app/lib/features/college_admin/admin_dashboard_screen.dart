@@ -34,12 +34,19 @@ final adminStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
     coursesCount = (res.data is List ? res.data : []).length;
   } catch (_) {}
 
+  int pendingStudentsCount = 0;
+  try {
+    final res = await api.get('/api/lab-assistant/pending-students/');
+    pendingStudentsCount = (res.data is List ? res.data : []).length;
+  } catch (_) {}
+
   return {
     'total_users': totalUsers,
     'departments': departmentsCount,
     'subjects': subjectsCount,
     'pending': pendingCount,
     'courses': coursesCount,
+    'pending_students': pendingStudentsCount,
   };
 });
 
@@ -131,6 +138,13 @@ class AdminDashboardScreen extends ConsumerWidget {
                       accentColor: AppColors.primaryLight,
                       subtitle: 'Student pool',
                     ),
+                    StatCard(
+                      label: 'Pending Approvals',
+                      value: '${stats['pending_students']}',
+                      icon: Icons.pending_actions_rounded,
+                      accentColor: AppColors.warning,
+                      subtitle: 'Awaiting review',
+                    ),
                   ],
                 ],
               ),
@@ -221,6 +235,12 @@ class AdminDashboardScreen extends ConsumerWidget {
                     icon: Icons.face_retouching_natural_rounded,
                     color: AppColors.accent,
                     route: '/admin/face-register',
+                  ),
+                  const _QuickActionCard(
+                    label: 'Student Approvals',
+                    icon: Icons.check_circle_rounded,
+                    color: AppColors.warning,
+                    route: '/admin/approvals',
                   ),
                 ],
               ],

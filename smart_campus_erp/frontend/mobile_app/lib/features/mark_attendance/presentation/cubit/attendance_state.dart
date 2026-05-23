@@ -30,6 +30,7 @@ class AttendanceState extends Equatable {
   final String? deviceId;
   final Map<String, dynamic> sessionData;
   final LocationErrorType locationErrorType;
+  final bool isMocked;
 
   const AttendanceState({
     this.currentStep = AttendanceStep.sessionCheck,
@@ -54,6 +55,7 @@ class AttendanceState extends Equatable {
     this.deviceId,
     this.sessionData = const {},
     this.locationErrorType = LocationErrorType.none,
+    this.isMocked = false,
   });
 
   AttendanceState copyWith({
@@ -72,6 +74,7 @@ class AttendanceState extends Equatable {
     String? deviceId,
     Map<String, dynamic>? sessionData,
     LocationErrorType? locationErrorType,
+    bool? isMocked,
   }) {
     return AttendanceState(
       currentStep: currentStep ?? this.currentStep,
@@ -89,6 +92,7 @@ class AttendanceState extends Equatable {
       deviceId: deviceId ?? this.deviceId,
       sessionData: sessionData ?? this.sessionData,
       locationErrorType: locationErrorType ?? this.locationErrorType,
+      isMocked: isMocked ?? this.isMocked,
     );
   }
 
@@ -109,5 +113,6 @@ class AttendanceState extends Equatable {
         deviceId,
         sessionData,
         locationErrorType,
+        isMocked,
       ];
 }

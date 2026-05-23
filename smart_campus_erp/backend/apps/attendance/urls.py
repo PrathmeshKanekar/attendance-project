@@ -9,6 +9,7 @@ from .views import (
     SessionLogsView,
     MySessionsView,
     ValidateSessionView,
+    SecurityAlertView,
 )
 
 urlpatterns = [
@@ -22,4 +23,5 @@ urlpatterns = [
     path('validate-geo/',                      CheckLocationView.as_view(),    name='validate-geo'),
     path('mark/',                              MarkAttendanceView.as_view(),   name='mark-attendance'),
     path('manual/',                            ManualAttendanceView.as_view(), name='manual-attendance'),
+    path('security-alert/',                    SecurityAlertView.as_view(),    name='security-alert'),
 ]

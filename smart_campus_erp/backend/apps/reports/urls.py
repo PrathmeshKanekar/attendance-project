@@ -9,6 +9,7 @@ from .views import (
     CollegeOverviewView,
     DashboardSummaryView,
     AttendanceTrendsView,
+    HODSummaryView,
 )
 
 urlpatterns = [
@@ -23,4 +24,5 @@ urlpatterns = [
     # New analytical endpoints
     path('summary/',                  DashboardSummaryView.as_view(),     name='report-dashboard-summary'),
     path('trends/',                   AttendanceTrendsView.as_view(),      name='report-trends'),
+    path('hod-summary/',              HODSummaryView.as_view(),            name='hod-summary'),
 ]

@@ -175,7 +175,7 @@ class _MarkAttendanceScreenState extends ConsumerState<MarkAttendanceScreen> wit
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                 onPressed: () async {
-                  final deviceId = await DeviceService().getDeviceId();
+                  final deviceId = await DeviceService.getDeviceId();
                   if (mounted) {
                     context.push('/face-scan', extra: FaceScanParams(
                       sessionId: widget.session.id,

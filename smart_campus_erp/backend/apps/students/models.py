@@ -13,6 +13,16 @@ class StudentProfile(models.Model):
     roll_number = models.CharField(max_length=20)
     year_of_study = models.IntegerField()
     date_of_birth = models.DateField(null=True, blank=True)
+    APPROVAL_CHOICES = [
+        ('PENDING_APPROVAL', 'Pending Approval'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'),
+    ]
+    approval_status = models.CharField(max_length=20, choices=APPROVAL_CHOICES, default='PENDING_APPROVAL')
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_students')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, null=True)
+    
     is_active = models.BooleanField(default=True)
     face_registered = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

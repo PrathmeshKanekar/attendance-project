@@ -41,6 +41,7 @@ import '../../features/notifications/notifications_screen.dart';
 import '../../features/super_admin/super_admin_dashboard_screen.dart';
 import '../../features/super_admin/colleges_screen.dart';
 import '../../features/auth/registration_screen.dart';
+import '../../features/lab_assistant/lab_approvals_screen.dart';
 import '../widgets/coming_soon_screen.dart';
 
 // CRITICAL FIX: router must be kept alive — never recreated
@@ -232,6 +233,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           builder: (c, s) => const EnrollmentsScreen()),
       GoRoute(path: '/admin/academic-years',
           builder: (c, s) => const AcademicYearsScreen()),
+      GoRoute(path: '/admin/approvals',
+          builder: (c, s) => const LabAssistantApprovalsScreen()),
 
       // Super Admin
       GoRoute(path: '/super-admin/dashboard',
