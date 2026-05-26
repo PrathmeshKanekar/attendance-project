@@ -22,4 +22,12 @@ class VirtualRoomViewSet(viewsets.ModelViewSet):
         # Filter by requesting user's college to enforce multi-tenant isolation
         if user and user.is_authenticated and hasattr(user, 'college') and user.college:
             queryset = queryset.filter(college=user.college)
+            if user.role == 'lab_assistant':
+                from apps.accounts.rbac import get_lab_assistant_departments
+                depts = get_lab_assistant_departments(user)
+                dept_names_and_codes = []
+                for d in depts:
+                    dept_names_and_codes.append(d.name)
+                    dept_names_and_codes.append(d.code)
+                queryset = queryset.filter(department__in=dept_names_and_codes)
         return queryset

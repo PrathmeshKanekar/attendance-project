@@ -19,6 +19,8 @@ class ReportsLoaded extends ReportsState {
   final List<Map<String, dynamic>> summaryCards;
   final List<Map<String, dynamic>> trends;
   final List<Map<String, dynamic>> detailedData;
+  final Map<String, dynamic> summaryMeta;
+  final Map<String, dynamic> pagination;
   final String activeReportType; // 'attendance' | 'defaulters' | 'overview'
   final String? warningMessage;  // Non-fatal partial load warning
 
@@ -26,6 +28,8 @@ class ReportsLoaded extends ReportsState {
     required this.summaryCards,
     required this.trends,
     this.detailedData = const [],
+    this.summaryMeta = const {},
+    this.pagination = const {},
     this.activeReportType = 'attendance',
     this.warningMessage,
   });
@@ -34,6 +38,8 @@ class ReportsLoaded extends ReportsState {
     List<Map<String, dynamic>>? summaryCards,
     List<Map<String, dynamic>>? trends,
     List<Map<String, dynamic>>? detailedData,
+    Map<String, dynamic>? summaryMeta,
+    Map<String, dynamic>? pagination,
     String? activeReportType,
     String? warningMessage,
   }) =>
@@ -41,13 +47,15 @@ class ReportsLoaded extends ReportsState {
         summaryCards: summaryCards ?? this.summaryCards,
         trends: trends ?? this.trends,
         detailedData: detailedData ?? this.detailedData,
+        summaryMeta: summaryMeta ?? this.summaryMeta,
+        pagination: pagination ?? this.pagination,
         activeReportType: activeReportType ?? this.activeReportType,
         warningMessage: warningMessage,
       );
 
   @override
   List<Object?> get props =>
-      [summaryCards, trends, detailedData, activeReportType, warningMessage];
+      [summaryCards, trends, detailedData, summaryMeta, pagination, activeReportType, warningMessage];
 }
 
 class ReportsError extends ReportsState {
@@ -100,37 +108,37 @@ class ReportsCubit extends Cubit<ReportsState> {
     ));
   }
 
-  /// Load teacher attendance summary for a specific allocation.
+  /// Load teacher/admin attendance summary with dynamic advanced query filters.
   Future<void> loadAttendanceSummary({
-    required String allocationId,
-    required String startDate,
-    required String endDate,
-    double threshold = 75.0,
+    required Map<String, dynamic> queryParams,
   }) async {
     final current = state is ReportsLoaded ? state as ReportsLoaded : null;
     emit(ReportsLoading());
 
     try {
-      final res = await _api.get('/api/reports/attendance-summary/', params: {
-        'allocation_id': allocationId,
-        'start_date': startDate,
-        'end_date': endDate,
-        'threshold': threshold.toString(),
-      });
+      final res = await _api.get('/api/reports/attendance-summary/', params: queryParams);
 
       final raw = res.data;
-      final inner = (raw is Map && raw['data'] is Map)
-          ? raw['data'] as Map
-          : (raw is Map ? raw : <String, dynamic>{});
+      final dataMap = (raw is Map && raw['data'] is Map)
+          ? raw['data'] as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      final students = (inner['students'] as List? ?? [])
+      final students = (dataMap['students'] as List? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
+
+      final summary = (dataMap['summary'] as Map? ?? {})
+          .map((k, v) => MapEntry(k.toString(), v));
+
+      final pagination = (dataMap['pagination'] as Map? ?? {})
+          .map((k, v) => MapEntry(k.toString(), v));
 
       emit(ReportsLoaded(
         summaryCards: current?.summaryCards ?? [],
         trends: current?.trends ?? [],
         detailedData: students,
+        summaryMeta: summary,
+        pagination: pagination,
         activeReportType: 'attendance',
       ));
     } catch (e) {

@@ -152,13 +152,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   Widget build(BuildContext context) {
     ref.listen<AuthState>(authProvider, (prev, next) {
       if (next is AuthError) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content        : Text(next.message),
-            backgroundColor: AppColors.danger,
-            behavior       : SnackBarBehavior.floating,
-          ),
-        );
+        final err = next.message.toLowerCase();
+        if (err.contains('waiting for lab assistant approval')) {
+          context.go('/pending-approval?status=pending');
+        } else if (err.contains('rejected') && err.contains('registration')) {
+          context.go('/pending-approval?status=rejected&message=${Uri.encodeComponent(next.message)}');
+        } else if (err.contains('blocked')) {
+          context.go('/pending-approval?status=blocked&message=${Uri.encodeComponent(next.message)}');
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content        : Text(next.message),
+              backgroundColor: AppColors.danger,
+              behavior       : SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     });
 

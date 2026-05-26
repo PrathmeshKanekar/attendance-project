@@ -41,6 +41,7 @@ import '../../features/notifications/notifications_screen.dart';
 import '../../features/super_admin/super_admin_dashboard_screen.dart';
 import '../../features/super_admin/colleges_screen.dart';
 import '../../features/auth/registration_screen.dart';
+import '../../features/auth/pending_approval_screen.dart';
 import '../../features/lab_assistant/lab_approvals_screen.dart';
 import '../widgets/coming_soon_screen.dart';
 
@@ -58,10 +59,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     initialLocation   : '/splash',
     refreshListenable : notifier,
     redirect: (context, state) {
+      final isOnRegister = state.matchedLocation == '/register';
+      // CRITICAL DIRECT ACCESS RULE: Allow direct access to the registration screen without authentication checks
+      if (isOnRegister) {
+        return null;
+      }
+
       final auth        = ref.read(authProvider);
       final isOnSplash  = state.matchedLocation == '/splash';
       final isOnLogin   = state.matchedLocation == '/login';
-      final isOnRegister = state.matchedLocation == '/register';
+      final isOnPending  = state.matchedLocation == '/pending-approval';
 
       // If still initializing — go to splash
       if (auth is AuthInitial || auth is AuthLoading) {
@@ -69,9 +76,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return null;
       }
 
-      // If unauthenticated — allow login and register
+      // If unauthenticated — allow login, register, and pending approval views
       if (auth is AuthUnauthenticated || auth is AuthError) {
-        if (!isOnLogin && !isOnRegister) return '/login';
+        if (!isOnLogin && !isOnRegister && !isOnPending) return '/login';
         return null;
       }
 
@@ -88,6 +95,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/splash', builder: (c, s) => const SplashScreen()),
       GoRoute(path: '/login',  builder: (c, s) => const LoginScreen()),
       GoRoute(path: '/register', builder: (c, s) => const RegistrationScreen()),
+      GoRoute(
+        path: '/pending-approval',
+        builder: (c, s) {
+          final query = s.uri.queryParameters;
+          return PendingApprovalScreen(
+            status: query['status'] ?? 'pending',
+            message: query['message'] ?? '',
+          );
+        },
+      ),
 
       // Student
       GoRoute(path: '/student/dashboard',

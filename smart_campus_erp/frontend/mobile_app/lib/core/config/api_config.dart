@@ -96,6 +96,8 @@ class ApiConfig {
   static const String divisions      = '/api/academic/divisions/';
   static const String departments    = '/api/academic/departments/';
   static const String subjects       = '/api/academic/subjects/';
+  static const String courses        = '/api/academic/courses/';
+  static const String academicYears  = '/api/academic/academic-years/';
   
   // Student
   static const String studentsRegister = '/api/students/register/';
