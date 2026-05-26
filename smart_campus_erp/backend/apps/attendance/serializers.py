@@ -163,6 +163,8 @@ class CheckLocationSerializer(serializers.Serializer):
     lng        = serializers.FloatField(min_value=-180, max_value=180)
     altitude   = serializers.FloatField(default=0.0, min_value=-100, max_value=9000)
     accuracy   = serializers.FloatField(default=10.0, min_value=0, max_value=500)
+    is_mocked  = serializers.BooleanField(required=False, default=False)
+    sensors    = serializers.JSONField(required=False, default=dict)
 
 
 class ManualAttendanceSerializer(serializers.Serializer):

@@ -76,13 +76,17 @@ class EmailLoginView(APIView):
                 profile = user.student_profile
                 if profile.approval_status == 'PENDING_APPROVAL':
                     return Response(
-                        {'error': 'Your account is pending approval. Please contact your Lab Assistant.'},
+                        {'error': 'Your account is waiting for Lab Assistant approval.'},
                         status=status.HTTP_403_FORBIDDEN,
                     )
                 elif profile.approval_status == 'REJECTED':
-                    reason = profile.rejection_reason or 'No reason provided.'
                     return Response(
-                        {'error': f'Your account has been rejected. Reason: {reason}'},
+                        {'error': 'Your registration was rejected. Contact administration.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                elif profile.approval_status == 'BLOCKED':
+                    return Response(
+                        {'error': 'Your account is blocked.'},
                         status=status.HTTP_403_FORBIDDEN,
                     )
             except AttributeError:
@@ -158,13 +162,17 @@ class PRNLoginView(APIView):
 
         if profile.approval_status == 'PENDING_APPROVAL':
             return Response(
-                {'error': 'Your account is pending approval. Please contact your Lab Assistant.'},
+                {'error': 'Your account is waiting for Lab Assistant approval.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
         elif profile.approval_status == 'REJECTED':
-            reason = profile.rejection_reason or 'No reason provided.'
             return Response(
-                {'error': f'Your account has been rejected. Reason: {reason}'},
+                {'error': 'Your registration was rejected. Contact administration.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        elif profile.approval_status == 'BLOCKED':
+            return Response(
+                {'error': 'Your account is blocked.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 

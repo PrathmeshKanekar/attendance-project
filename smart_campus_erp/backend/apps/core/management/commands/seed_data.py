@@ -1,508 +1,979 @@
-import uuid
 import random
-import sys
-from datetime import date, timedelta, datetime, time
+import uuid
+import string
+from datetime import date, datetime, timedelta, time
 from django.core.management.base import BaseCommand
-from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth.hashers import make_password
-from faker import Faker
 
+# Import all models safely
 from apps.tenants.models import College
-from apps.accounts.models import User, DeviceRegistry, normalize_device_id
 from apps.academic.models import (
-    Department, Course, AcademicYear, Semester, Division, Subject, SubjectAllocation
+    Department, Course, AcademicYear, Division, Subject, SubjectAllocation, Semester, Timetable
 )
+from apps.accounts.models import User, DeviceRegistry
+from apps.staff.models import StaffProfile, LabAssistantDepartment
 from apps.students.models import StudentProfile, StudentSubjectEnrollment
-from apps.staff.models import StaffProfile
-from apps.approvals.models import ApprovalRequest
-from apps.virtual_rooms.models import VirtualRoom, RoomCorner
 from apps.attendance.models import AttendanceSession, AttendanceLog, ManualAttendanceRequest
+from apps.virtual_rooms.models import VirtualRoom, RoomCorner
 from apps.face_recognition.models import FaceDescriptor, FaceRegistrationImage
-from apps.notifications.models import Notification
+from apps.notifications.models import Notification, NoticeBoard
+from apps.audit.models import AuditLog
+from apps.approvals.models import ApprovalRequest
 
 
 class Command(BaseCommand):
-    help = 'Seed production-quality multi-college test data for dashboards, reports, and RBAC testing.'
+    help = 'Seed comprehensive, production-grade test data for Smart Campus ERP'
 
     def add_arguments(self, parser):
-        parser.add_argument('--reset', action='store_true', help='Wipe all data before seeding')
-        parser.add_argument('--students', type=int, default=300, help='Total students across all colleges')
-        parser.add_argument('--days', type=int, default=15, help='Days of attendance history')
-
-    def log(self, msg):
-        self.stdout.write(msg)
-        self.stdout.flush()
+        parser.add_argument(
+            '--reset',
+            action='store_true',
+            help='Delete all existing data before seeding',
+        )
+        parser.add_argument(
+            '--students-count',
+            type=int,
+            default=300,
+            help='Number of realistic students to seed (default: 300)',
+        )
 
     def handle(self, *args, **options):
-        if options['reset']:
+        reset_active = options['reset']
+        students_count = options['students_count']
+
+        if reset_active:
             self._reset_data()
-        try:
-            with transaction.atomic():
-                self._seed(options['students'], options['days'])
-        except Exception as e:
-            self.log(self.style.ERROR(f"FAILED: {e}"))
-            import traceback; traceback.print_exc()
-            return
-        self.log(self.style.SUCCESS("\nDatabase seeding completed successfully!"))
+
+        self.stdout.write(self.style.MIGRATE_HEADING(
+            '\n=== Smart Campus ERP - Seeding Industrial Test Data ===\n'
+        ))
+
+        # 1. Tenant (College)
+        college = self._seed_college()
+
+        # 2. Academic Year
+        academic_year = self._seed_academic_year(college)
+
+        # 3. Departments
+        departments = self._seed_departments(college)
+
+        # 4. Courses
+        courses = self._seed_courses(college, departments)
+
+        # 5. Semesters
+        semesters = self._seed_semesters(college, courses, academic_year)
+
+        # 6. Core Staff & Authorities (Super Admin, Principal, HODs, Teachers, Lab Assistants)
+        users = self._seed_staff_users(college, departments)
+
+        # 7. Update HOD fields on Department models
+        self._assign_department_hods(departments, users)
+
+        # 8. Lab Assistant Dynamic Multi-Department RBAC assignments
+        self._seed_lab_assistant_rbac(users, departments)
+
+        # 9. Divisions (A and B across different years)
+        divisions = self._seed_divisions(college, courses, academic_year, users)
+
+        # 10. Subjects (Theory and Practical Labs)
+        subjects = self._seed_subjects(college, departments, courses)
+
+        # 11. Virtual Geofenced Rooms & Bounding Corners
+        rooms = self._seed_virtual_rooms(college, users['admin'], departments)
+
+        # 12. Subject Allocations
+        allocations = self._seed_subject_allocations(college, subjects, divisions, academic_year, users)
+
+        # 13. Timetable Grid
+        self._seed_timetable_grid(college, divisions, allocations)
+
+        # 14. Bulk Student Registrations (200-500)
+        student_profiles = self._seed_students_bulk(college, divisions, courses, academic_year, students_count)
+
+        # 15. Student Enrollments & Biometrics (Face Descriptor + Device Registry)
+        self._seed_student_enrollments_and_biometrics(student_profiles, allocations, academic_year)
+
+        # 16. Historical Attendance Logging System (30-day timeline)
+        self._seed_historical_attendance(college, allocations, student_profiles, rooms)
+
+        # 17. Notice Boards & Operational Notifications
+        self._seed_notifications_and_notices(college, users, departments)
+
+        # 18. System Operations Audit Logs
+        self._seed_audit_logs(college, users)
+
+        # Print beautiful production summary
+        self._print_production_summary(college, users, departments, students_count)
 
     def _reset_data(self):
-        self.log("Resetting database...")
-        from apps.reports.models import GeneratedReport
-        from apps.audit.models import AuditLog
-        from django.db import connection
+        self.stdout.write(self.style.WARNING('Resetting existing data...'))
         
-        # Drop legacy tables that hold stale constraints to accounts_user
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
-            tables = [row[0] for row in cursor.fetchall()]
-            if 'virtual_rooms_roomcorner' in tables:
-                self.log("Dropping legacy table virtual_rooms_roomcorner...")
-                cursor.execute("DROP TABLE virtual_rooms_roomcorner CASCADE")
-            if 'virtual_rooms_virtualroom' in tables:
-                self.log("Dropping legacy table virtual_rooms_virtualroom...")
-                cursor.execute("DROP TABLE virtual_rooms_virtualroom CASCADE")
-
-        ManualAttendanceRequest.objects.all().delete()
+        AuditLog.objects.all().delete()
+        Notification.objects.all().delete()
+        NoticeBoard.objects.all().delete()
         AttendanceLog.objects.all().delete()
+        ManualAttendanceRequest.objects.all().delete()
         AttendanceSession.objects.all().delete()
-        RoomCorner.objects.all().delete()
-        # NULL out user FK before deleting rooms/users
-        VirtualRoom.objects.all().update(created_by=None)
-        VirtualRoom.objects.all().delete()
         FaceDescriptor.objects.all().delete()
         FaceRegistrationImage.objects.all().delete()
         StudentSubjectEnrollment.objects.all().delete()
         StudentProfile.objects.all().delete()
+        LabAssistantDepartment.objects.all().delete()
         StaffProfile.objects.all().delete()
         ApprovalRequest.objects.all().delete()
         DeviceRegistry.objects.all().delete()
-        Notification.objects.all().delete()
-        GeneratedReport.objects.all().delete()
-        AuditLog.objects.all().delete()
+        
+        # Clear m2m tables
+        for dept in Department.objects.all():
+            dept.notices.clear()
+
+        Timetable.objects.all().delete()
         SubjectAllocation.objects.all().delete()
+        RoomCorner.objects.all().delete()
+        VirtualRoom.objects.all().delete()
         Subject.objects.all().delete()
-        # NULL out coordinator FK before deleting divisions/users
-        Division.objects.all().update(class_coordinator=None)
         Division.objects.all().delete()
         Semester.objects.all().delete()
         AcademicYear.objects.all().delete()
         Course.objects.all().delete()
-        # NULL out HOD FK before deleting departments/users
+        
+        # Set HODs to Null first to avoid cascade delete block
         Department.objects.all().update(hod=None)
         Department.objects.all().delete()
-        User.objects.exclude(email='superadmin@app.com').delete()
+        
+        # Delete non-superusers
+        User.objects.filter(is_superuser=False).delete()
         College.objects.all().delete()
-        self.log(self.style.SUCCESS("Reset complete."))
+        
+        self.stdout.write(self.style.SUCCESS('Reset complete.'))
 
-    def _seed(self, total_students, history_days):
-        fake = Faker('en_IN')
-        pw = make_password('password123')
+    def _seed_college(self):
+        college, _ = College.objects.get_or_create(
+            code='DEC',
+            defaults={
+                'name': 'Demo Engineering College',
+                'email_domain': 'dec.edu',
+                'address': '123 Tech Campus, Pune, Maharashtra 411008',
+                'phone': '020-27891234',
+                'is_active': True,
+            }
+        )
+        self.stdout.write(f'[OK] College: {college.name}')
+        return college
 
-        # ── 1. Super Admin ──
-        self.log("1/13 Super Admin...")
-        sa, created = User.objects.get_or_create(
-            email='superadmin@app.com',
-            defaults=dict(first_name='System', last_name='SuperAdmin', role='super_admin',
-                          is_active=True, is_approved=True, is_staff=True, is_superuser=True, password=pw))
-        if not created:
-            sa.password = pw; sa.save()
+    def _seed_academic_year(self, college):
+        year, _ = AcademicYear.objects.get_or_create(
+            college=college,
+            name='2024-25',
+            defaults={
+                'start_date': date(2024, 6, 1),
+                'end_date': date(2025, 4, 30),
+                'is_current': True,
+            }
+        )
+        self.stdout.write(f'[OK] Academic Year: {year.name}')
+        return year
 
-        # ── 2. Colleges ──
-        self.log("2/13 Colleges...")
-        college_cfgs = [
-            ('Imperial College of Engineering', 'ICE', 'ice.edu', '411005', 18.5204, 73.8567),
-            ('Trinity College of Technology',   'TCT', 'tct.edu', '400051', 19.0760, 72.8777),
-            ('Apex Polytechnic Institute',      'API', 'api.edu', '400001', 18.9696, 72.8230),
+    def _seed_departments(self, college):
+        dept_data = [
+            ('CE', 'Computer Engineering'),
+            ('IT', 'Information Technology'),
+            ('ME', 'Mechanical Engineering'),
+            ('EXTC', 'Electronics & Telecommunication'),
+            ('AIDS', 'AI & Data Science'),
+            ('CIVIL', 'Civil Engineering'),
         ]
-        colleges = []
-        for name, code, domain, pin, lat, lng in college_cfgs:
-            c = College.objects.create(name=name, code=code, email_domain=domain,
-                                       address=f'{fake.street_address()}, {pin}',
-                                       phone=fake.phone_number()[:20], is_active=True)
-            c._lat, c._lng = lat, lng          # transient attrs for room coords
-            colleges.append(c)
+        depts = {}
+        for code, name in dept_data:
+            dept, _ = Department.objects.get_or_create(
+                college=college,
+                code=code,
+                defaults={'name': name, 'is_active': True}
+            )
+            depts[code] = dept
+        self.stdout.write(f'[OK] Seeded {len(depts)} Departments.')
+        return depts
 
-        # ── 3. Admins & Principals ──
-        self.log("3/13 Admins & Principals...")
-        principals = {}
-        approval_objs = []
-        for c in colleges:
-            User.objects.create(email=f'admin@{c.email_domain}', first_name=fake.first_name(),
-                                last_name=fake.last_name(), role='college_admin', college=c,
-                                is_active=True, is_approved=True, password=pw)
-            p = User.objects.create(email=f'principal@{c.email_domain}', first_name=f'Dr. {fake.first_name()}',
-                                    last_name=fake.last_name(), role='principal', college=c,
-                                    is_active=True, is_approved=True, password=pw)
-            principals[c.id] = p
-            approval_objs.append(ApprovalRequest(college=c, user=p, requested_role='principal',
-                                                  status='approved', reviewed_by=sa, reviewed_at=timezone.now()))
+    def _seed_courses(self, college, departments):
+        courses = {}
+        for code, dept in departments.items():
+            course, _ = Course.objects.get_or_create(
+                college=college,
+                code=f'BE{code}',
+                defaults={
+                    'department': dept,
+                    'name': f'B.E. {dept.name}',
+                    'duration_years': 4,
+                    'is_active': True,
+                }
+            )
+            courses[code] = course
+        self.stdout.write(f'[OK] Seeded {len(courses)} Courses.')
+        return courses
 
-        # ── 4. Departments ──
-        self.log("4/13 Departments...")
-        dept_names = [('Computer Engineering','CO'),('Information Technology','IT'),
-                      ('Mechanical Engineering','ME'),('Civil Engineering','CE'),('Electronics Engineering','EE')]
-        depts = {}  # {college_id: [dept, ...]}
-        for c in colleges:
-            depts[c.id] = []
-            for dn, dc in dept_names:
-                d = Department.objects.create(college=c, name=dn, code=dc, is_active=True)
-                depts[c.id].append(d)
+    def _seed_semesters(self, college, courses, academic_year):
+        semesters = []
+        for code, course in courses.items():
+            # Seed Year 2 Sem 3
+            sem3, _ = Semester.objects.get_or_create(
+                college=college,
+                course=course,
+                academic_year=academic_year,
+                semester_number=3,
+                defaults={
+                    'start_date': date(2024, 6, 15),
+                    'end_date': date(2024, 11, 30),
+                    'is_active': True,
+                }
+            )
+            # Seed Year 3 Sem 5
+            sem5, _ = Semester.objects.get_or_create(
+                college=college,
+                course=course,
+                academic_year=academic_year,
+                semester_number=5,
+                defaults={
+                    'start_date': date(2024, 6, 15),
+                    'end_date': date(2024, 11, 30),
+                    'is_active': True,
+                }
+            )
+            semesters.extend([sem3, sem5])
+        self.stdout.write(f'[OK] Seeded semesters for all courses.')
+        return semesters
 
-        # ── 5. Courses ──
-        self.log("5/13 Courses...")
-        course_cfgs = [('BTech', 'BTECH', 4), ('Diploma', 'DIP', 3)]
-        courses = {}  # {college_id: [course, ...]}
-        for c in colleges:
-            courses[c.id] = []
-            for dept in depts[c.id]:
-                for cn, cc, dur in course_cfgs:
-                    co = Course.objects.create(college=c, department=dept,
-                                               name=f'{cn} {dept.name}', code=f'{cc}-{dept.code}',
-                                               duration_years=dur, is_active=True)
-                    courses[c.id].append(co)
+    def _seed_staff_users(self, college, departments):
+        users = {}
+        hashed_pwd = make_password('Admin@123')
 
-        # ── 6. Academic Year & Semesters ──
-        self.log("6/13 Academic Year...")
-        ayears = {}
-        for c in colleges:
-            ay = AcademicYear.objects.create(college=c, name='2025-26',
-                                             start_date=date(2025,6,1), end_date=date(2026,5,31), is_current=True)
-            ayears[c.id] = ay
-            for co in courses[c.id]:
-                for yr in range(1, co.duration_years+1):
-                    Semester.objects.create(college=c, course=co, academic_year=ay,
-                                            semester_number=yr*2-1, start_date=date(2025,6,15),
-                                            end_date=date(2025,11,30), is_active=True)
+        # Super Admin
+        super_admin, created = User.objects.get_or_create(
+            email='superadmin@platform.com',
+            defaults={
+                'first_name': 'Super',
+                'last_name': 'Admin',
+                'role': 'super_admin',
+                'is_active': True,
+                'is_approved': True,
+                'is_staff': True,
+                'is_superuser': True,
+                'password': hashed_pwd,
+            }
+        )
+        users['super_admin'] = super_admin
 
-        # ── 7. Divisions (Year 2 & 3, Div A/B) ──
-        self.log("7/13 Divisions...")
-        divs = {}  # {college_id: [div, ...]}
-        for c in colleges:
-            divs[c.id] = []
-            for co in courses[c.id]:
-                for yr in [2, 3]:
-                    if yr > co.duration_years: continue
-                    for dn in ['A', 'B']:
-                        dv = Division.objects.create(college=c, course=co, academic_year=ayears[c.id],
-                                                      name=dn, year_of_study=yr, capacity=60, is_active=True)
-                        divs[c.id].append(dv)
+        # College Admin
+        admin, _ = User.objects.get_or_create(
+            email='admin@dec.edu',
+            defaults={
+                'first_name': 'College',
+                'last_name': 'Admin',
+                'role': 'college_admin',
+                'college': college,
+                'is_active': True,
+                'is_approved': True,
+                'password': hashed_pwd,
+            }
+        )
+        users['admin'] = admin
 
-        # ── 8. Staff: HODs, Teachers, Lab Assistants ──
-        self.log("8/13 Staff...")
-        staff_profiles = []
-        teachers = {}  # {college_id: [user, ...]}
-        for c in colleges:
-            teachers[c.id] = []
-            pri = principals[c.id]
-            for dept in depts[c.id]:
-                # HOD
-                hod = User.objects.create(email=f'hod.{dept.code.lower()}@{c.email_domain}',
-                    first_name=fake.first_name(), last_name=fake.last_name(), role='hod',
-                    college=c, is_active=True, is_approved=True, password=pw)
-                dept.hod = hod; dept.save()
-                staff_profiles.append(StaffProfile(user=hod, college=c, employee_id=f'HOD-{c.code}-{dept.code}',
-                    department=dept, designation='HOD', qualification='Ph.D',
-                    specialization=dept.name, experience_years=15, joining_date=date(2015,1,1)))
-                approval_objs.append(ApprovalRequest(college=c, user=hod, requested_role='hod',
-                    status='approved', reviewed_by=pri, reviewed_at=timezone.now()))
+        # Principal
+        principal, _ = User.objects.get_or_create(
+            email='principal@dec.edu',
+            defaults={
+                'first_name': 'Ramesh',
+                'last_name': 'Sharma',
+                'role': 'principal',
+                'college': college,
+                'is_active': True,
+                'is_approved': True,
+                'password': hashed_pwd,
+            }
+        )
+        users['principal'] = principal
 
-                # 2 approved teachers + 1 pending
-                for idx in range(1, 4):
-                    approved = idx <= 2
-                    t = User.objects.create(email=f't{idx}.{dept.code.lower()}@{c.email_domain}',
-                        first_name=fake.first_name(), last_name=fake.last_name(), role='teacher',
-                        college=c, is_active=approved, is_approved=approved, password=pw)
-                    staff_profiles.append(StaffProfile(user=t, college=c,
-                        employee_id=f'TCH-{c.code}-{dept.code}-{idx}', department=dept,
-                        designation='Asst. Professor', qualification='M.Tech',
-                        specialization=dept.name, experience_years=random.randint(2,10),
-                        joining_date=date(2021,6,1)))
-                    if approved: teachers[c.id].append(t)
-                    approval_objs.append(ApprovalRequest(college=c, user=t, requested_role='teacher',
-                        status='approved' if approved else 'pending',
-                        reviewed_by=pri if approved else None,
-                        reviewed_at=timezone.now() if approved else None))
-
-                # 1 lab assistant
-                la = User.objects.create(email=f'la.{dept.code.lower()}@{c.email_domain}',
-                    first_name=fake.first_name(), last_name=fake.last_name(), role='lab_assistant',
-                    college=c, is_active=True, is_approved=True, password=pw)
-                staff_profiles.append(StaffProfile(user=la, college=c,
-                    employee_id=f'LAB-{c.code}-{dept.code}', department=dept,
-                    designation='Lab Assistant', qualification='Diploma',
-                    specialization='Labs', experience_years=3, joining_date=date(2022,1,1)))
-                approval_objs.append(ApprovalRequest(college=c, user=la, requested_role='lab_assistant',
-                    status='approved', reviewed_by=pri, reviewed_at=timezone.now()))
-
-        StaffProfile.objects.bulk_create(staff_profiles)
-        ApprovalRequest.objects.bulk_create(approval_objs)
-
-        # Assign class coordinators
-        for c in colleges:
-            tchs = teachers[c.id]
-            if not tchs: continue
-            for i, dv in enumerate(divs[c.id]):
-                dv.class_coordinator = tchs[i % len(tchs)]
-                dv.save()
-        self.log(f"   {len(staff_profiles)} staff profiles created.")
-
-        # ── 9. Subjects & Allocations ──
-        self.log("9/13 Subjects & Allocations...")
-        subj_map = {
-            'CO': [('DBMS','CS301',2,3),('Operating Systems','CS302',2,4),('Python','CS303',2,3),
-                   ('Computer Networks','CS305',3,5),('AI','CS401',3,6)],
-            'IT': [('InfoSec','IT301',2,3),('Web Dev','IT302',2,4),('Cloud','IT305',3,5)],
-            'ME': [('Thermodynamics','ME301',2,3),('Fluid Mechanics','ME302',2,4)],
-            'CE': [('Surveying','CE301',2,3),('Concrete Tech','CE303',2,4)],
-            'EE': [('Microcontrollers','EE301',2,3),('DSP','EE302',2,4)],
+        # Department HODs
+        hod_names = {
+            'CE': ('Sunita', 'Patil'),
+            'IT': ('Anil', 'Verma'),
+            'ME': ('Suresh', 'Joshi'),
+            'EXTC': ('Amit', 'Shah'),
+            'AIDS': ('Meera', 'Nair'),
+            'CIVIL': ('Karan', 'Deshmukh'),
         }
-        allocs = {}  # {college_id: [alloc, ...]}
-        # Pre-index: division by (college_id, course_id, year_of_study) -> [div, ...]
-        div_index = {}
-        for c in colleges:
-            allocs[c.id] = []
-            for dv in divs[c.id]:
-                key = (c.id, dv.course_id, dv.year_of_study)
-                div_index.setdefault(key, []).append(dv)
+        for code, dept in departments.items():
+            first, last = hod_names[code]
+            hod, _ = User.objects.get_or_create(
+                email=f'hod.{code.lower()}@dec.edu',
+                defaults={
+                    'first_name': first,
+                    'last_name': last,
+                    'role': 'hod',
+                    'college': college,
+                    'is_active': True,
+                    'is_approved': True,
+                    'password': hashed_pwd,
+                }
+            )
+            users[f'hod_{code}'] = hod
+            
+            # Create Staff Profile for HOD
+            StaffProfile.objects.get_or_create(
+                user=hod,
+                defaults={
+                    'college': college,
+                    'employee_id': f'EMP-HOD-{code}',
+                    'department': dept,
+                    'designation': 'Professor & HOD',
+                    'qualification': 'Ph.D. in Engineering',
+                    'specialization': f'Advanced {dept.name}',
+                    'experience_years': 15,
+                    'joining_date': date(2018, 6, 1),
+                }
+            )
 
-        for c in colleges:
-            tchs = teachers[c.id]
-            if not tchs: continue
-            t_by_dept = {}
-            for t in tchs:
-                sp = StaffProfile.objects.get(user=t)
-                t_by_dept.setdefault(sp.department.code, []).append(t)
+        # Teachers (2 per dept)
+        teacher_names = {
+            'CE': [('Anjali', 'Desai'), ('Vikram', 'Joshi')],
+            'IT': [('Kiran', 'Rao'), ('Rajesh', 'Pillai')],
+            'ME': [('Deepak', 'Kumar'), ('Sunil', 'More')],
+            'EXTC': [('Jyoti', 'Das'), ('Alok', 'Trivedi')],
+            'AIDS': [('Vijay', 'Sen'), ('Komal', 'Pandey')],
+            'CIVIL': [('Pranav', 'Mishra'), ('Swati', 'Dave')],
+        }
+        for code, dept in departments.items():
+            for i, (first, last) in enumerate(teacher_names[code], 1):
+                t_email = f'teacher.{code.lower()}{i}@dec.edu'
+                teacher, _ = User.objects.get_or_create(
+                    email=t_email,
+                    defaults={
+                        'first_name': first,
+                        'last_name': last,
+                        'role': 'teacher',
+                        'college': college,
+                        'is_active': True,
+                        'is_approved': True,
+                        'password': hashed_pwd,
+                    }
+                )
+                users[f'teacher_{code}_{i}'] = teacher
 
-            for dept in depts[c.id]:
-                slist = subj_map.get(dept.code, [])
-                dt = t_by_dept.get(dept.code, [])
-                if not dt: continue
-                dept_courses = [co for co in courses[c.id] if co.department_id == dept.id]
-                for co in dept_courses:
-                    for sname, scode, yr, sem in slist:
-                        subj = Subject.objects.create(college=c, department=dept, course=co,
-                            name=sname, code=f'{scode}-{co.code}', year_of_study=yr,
-                            semester=sem, credits=4, is_active=True)
-                        matching_divs = div_index.get((c.id, co.id, yr), [])
-                        for di, dv in enumerate(matching_divs):
-                            teacher = dt[(di + ord(scode[-1])) % len(dt)]
-                            al = SubjectAllocation.objects.create(college=c, subject=subj,
-                                teacher=teacher, division=dv, academic_year=ayears[c.id], is_active=True)
-                            allocs[c.id].append(al)
-        self.log(f"   {sum(len(v) for v in allocs.values())} allocations created.")
+                # Create Staff Profile for Teacher
+                StaffProfile.objects.get_or_create(
+                    user=teacher,
+                    defaults={
+                        'college': college,
+                        'employee_id': f'EMP-T-{code}-{i}',
+                        'department': dept,
+                        'designation': 'Assistant Professor' if i == 2 else 'Associate Professor',
+                        'qualification': 'M.Tech / Ph.D.',
+                        'specialization': f'{dept.name} Core',
+                        'experience_years': 5 + i * 2,
+                        'joining_date': date(2021, 1, 1),
+                    }
+                )
 
-        # ── 10. Virtual Rooms ──
-        self.log("10/13 Virtual Rooms...")
-        rooms = {}
-        for c in colleges:
-            lat, lng = c._lat, c._lng
-            pri = principals[c.id]
-            r1 = VirtualRoom.objects.create(college=c, name='Lab-A101', building='Main Block',
-                department='CS', floor_number=1, capacity=60, center_lat=lat, center_lng=lng, created_by=pri)
-            r2 = VirtualRoom.objects.create(college=c, name='Lab-B202', building='Science Wing',
-                department='IT', floor_number=2, capacity=60, center_lat=lat+.0003, center_lng=lng+.0003, created_by=pri)
-            r3 = VirtualRoom.objects.create(college=c, name='Seminar-Hall', building='Admin Block',
-                department='General', floor_number=0, capacity=150, center_lat=lat-.0004, center_lng=lng-.0004, created_by=pri)
-            r4 = VirtualRoom.objects.create(college=c, name='Room-301', building='Lecture Block',
-                department='ME', floor_number=3, capacity=80, center_lat=lat+.0005, center_lng=lng-.0005, created_by=pri)
-            # Polygon corners for Room-301
-            for idx, (cl, cg) in enumerate([(lat+.0003,lng-.0007),(lat+.0003,lng-.0003),
-                                             (lat+.0007,lng-.0003),(lat+.0007,lng-.0007)]):
-                RoomCorner.objects.create(room=r4, corner_index=idx, latitude=cl, longitude=cg)
-            rooms[c.id] = [r1, r2, r3, r4]
+        # Lab Assistants
+        # CE assistant
+        la_ce, _ = User.objects.get_or_create(
+            email='labassistant.ce@dec.edu',
+            defaults={
+                'first_name': 'Nikhil',
+                'last_name': 'More',
+                'role': 'lab_assistant',
+                'college': college,
+                'is_active': True,
+                'is_approved': True,
+                'password': hashed_pwd,
+            }
+        )
+        users['la_ce'] = la_ce
+        StaffProfile.objects.get_or_create(
+            user=la_ce,
+            defaults={
+                'college': college,
+                'employee_id': 'EMP-LA-CE',
+                'department': departments['CE'],
+                'designation': 'Senior Lab Assistant',
+                'qualification': 'Diploma in Computer Tech',
+                'specialization': 'Network & Lab Systems',
+                'experience_years': 4,
+                'joining_date': date(2022, 6, 1),
+            }
+        )
 
-        # ── 11. Students (bulk) ──
-        self.log("11/13 Students...")
-        per_college = total_students // len(colleges)
-        stu_users, stu_meta = [], []
-        for c in colleges:
-            cdivs = divs[c.id]
-            if not cdivs: continue
-            for i in range(1, per_college + 1):
-                dv = cdivs[(i-1) % len(cdivs)]
-                rand = random.random()
-                status = 'APPROVED' if rand < 0.85 else ('PENDING_APPROVAL' if rand < 0.95 else 'REJECTED')
-                approved = status == 'APPROVED'
-                dev_raw = f'DEVICE-{c.code}-{i:04d}'
-                dev_norm = normalize_device_id(dev_raw)
-                stu_users.append(User(email=f's{i}.{c.code.lower()}@{c.email_domain}',
-                    first_name=fake.first_name(), last_name=fake.last_name(), role='student',
-                    college=c, is_active=approved, is_approved=approved, password=pw,
-                    device_id=dev_norm if approved else ''))
-                stu_meta.append(dict(college=c, div=dv, status=status, approved=approved,
-                                     roll=i, dev_norm=dev_norm))
+        # IT assistant
+        la_it, _ = User.objects.get_or_create(
+            email='labassistant.it@dec.edu',
+            defaults={
+                'first_name': 'Rahul',
+                'last_name': 'Patil',
+                'role': 'lab_assistant',
+                'college': college,
+                'is_active': True,
+                'is_approved': True,
+                'password': hashed_pwd,
+            }
+        )
+        users['la_it'] = la_it
+        StaffProfile.objects.get_or_create(
+            user=la_it,
+            defaults={
+                'college': college,
+                'employee_id': 'EMP-LA-IT',
+                'department': departments['IT'],
+                'designation': 'Lab Assistant',
+                'qualification': 'B.Sc. IT',
+                'specialization': 'Database Administration',
+                'experience_years': 2,
+                'joining_date': date(2023, 7, 15),
+            }
+        )
 
-        User.objects.bulk_create(stu_users)
-        # Re-fetch to get DB-assigned IDs
-        emails = [u.email for u in stu_users]
-        db_users = {u.email: u for u in User.objects.filter(email__in=emails)}
+        # Multi-department assistant (CE and IT)
+        la_multi, _ = User.objects.get_or_create(
+            email='labassistant.multi@dec.edu',
+            defaults={
+                'first_name': 'Sanjay',
+                'last_name': 'Vyas',
+                'role': 'lab_assistant',
+                'college': college,
+                'is_active': True,
+                'is_approved': True,
+                'password': hashed_pwd,
+            }
+        )
+        users['la_multi'] = la_multi
+        StaffProfile.objects.get_or_create(
+            user=la_multi,
+            defaults={
+                'college': college,
+                'employee_id': 'EMP-LA-MULTI',
+                'department': departments['CE'],
+                'designation': 'System Specialist Lab Assistant',
+                'qualification': 'B.E. Computer Science',
+                'specialization': 'Multi-platform Lab Automation',
+                'experience_years': 6,
+                'joining_date': date(2020, 10, 1),
+            }
+        )
 
-        profiles, devs, faces, fimgs, approvals2 = [], [], [], [], []
-        for idx, u_obj in enumerate(stu_users):
-            m = stu_meta[idx]
-            db_u = db_users[u_obj.email]
-            c = m['college']
-            dv = m['div']
-            la = User.objects.filter(college=c, role='lab_assistant').first()
+        self.stdout.write(f'[OK] Seeded Admin, Principal, HODs, Teachers, and Lab Assistants.')
+        return users
 
-            sp = StudentProfile(user=db_u, college=c, division=dv, course=dv.course,
-                academic_year=dv.academic_year,
-                prn=f'PRN-{c.code}-{dv.course.code}-{dv.year_of_study}-{m["roll"]:03d}',
-                roll_number=str(m['roll']), year_of_study=dv.year_of_study,
-                approval_status=m['status'], approved_by=la if m['approved'] else None,
-                approved_at=timezone.now() if m['approved'] else None,
-                is_active=m['approved'], face_registered=m['approved'])
-            profiles.append(sp)
+    def _assign_department_hods(self, departments, users):
+        for code, dept in departments.items():
+            dept.hod = users[f'hod_{code}']
+            dept.save()
+        self.stdout.write('[OK] Assigned HOD users to all Departments.')
 
-            approvals2.append(ApprovalRequest(college=c, user=db_u, requested_role='student',
-                status='approved' if m['status']=='APPROVED' else ('rejected' if m['status']=='REJECTED' else 'pending'),
-                reviewed_by=la if m['approved'] else None,
-                reviewed_at=timezone.now() if m['approved'] else None))
+    def _seed_lab_assistant_rbac(self, users, departments):
+        # Bind lab assistants to their departments
+        LabAssistantDepartment.objects.get_or_create(user=users['la_ce'], department=departments['CE'], defaults={'is_active': True})
+        LabAssistantDepartment.objects.get_or_create(user=users['la_it'], department=departments['IT'], defaults={'is_active': True})
+        
+        # la_multi is assigned to both CE and IT
+        LabAssistantDepartment.objects.get_or_create(user=users['la_multi'], department=departments['CE'], defaults={'is_active': True})
+        LabAssistantDepartment.objects.get_or_create(user=users['la_multi'], department=departments['IT'], defaults={'is_active': True})
+        
+        self.stdout.write('[OK] Bound Lab Assistants to Departments (M2M RBAC Security Seeded).')
 
-        StudentProfile.objects.bulk_create(profiles)
-        ApprovalRequest.objects.bulk_create(approvals2)
+    def _seed_divisions(self, college, courses, academic_year, users):
+        divisions = []
+        div_configs = [
+            # Course, Name, Year, Coordinator
+            ('CE', 'A', 2, users['teacher_CE_1']),
+            ('CE', 'B', 2, users['teacher_CE_2']),
+            ('CE', 'A', 3, users['teacher_CE_1']),
+            ('IT', 'A', 2, users['teacher_IT_1']),
+            ('IT', 'A', 3, users['teacher_IT_2']),
+            ('ME', 'A', 2, users['teacher_ME_1']),
+            ('ME', 'A', 3, users['teacher_ME_2']),
+            ('EXTC', 'A', 2, users['teacher_EXTC_1']),
+            ('AIDS', 'A', 2, users['teacher_AIDS_1']),
+        ]
+        for c_code, name, year, coord in div_configs:
+            div, _ = Division.objects.get_or_create(
+                course=courses[c_code],
+                academic_year=academic_year,
+                name=name,
+                year_of_study=year,
+                defaults={
+                    'college': college,
+                    'capacity': 60,
+                    'class_coordinator': coord,
+                    'is_active': True,
+                }
+            )
+            divisions.append(div)
+        self.stdout.write(f'[OK] Seeded {len(divisions)} academic divisions.')
+        return divisions
 
-        # Re-fetch profiles for FK references
-        db_profiles = {sp.user_id: sp for sp in StudentProfile.objects.filter(user__email__in=emails)}
+    def _seed_subjects(self, college, departments, courses):
+        subject_configs = [
+            # Name, Code, Dept, Course, YearOfStudy, Sem, Credits, IsLab
+            ('Data Structures', 'DS301', 'CE', 'CE', 2, 3, 4, False),
+            ('Database Management Systems', 'DB302', 'CE', 'CE', 2, 3, 4, False),
+            ('Data Structures Laboratory', 'DS301L', 'CE', 'CE', 2, 3, 2, True),
+            ('Database Management Systems Lab', 'DB302L', 'CE', 'CE', 2, 3, 2, True),
+            ('Computer Networks', 'CN501', 'CE', 'CE', 3, 5, 4, False),
+            
+            ('Web Programming', 'WP301', 'IT', 'IT', 2, 3, 4, False),
+            ('Software Engineering & Design', 'SE302', 'IT', 'IT', 2, 3, 4, False),
+            ('Web Programming Laboratory', 'WP301L', 'IT', 'IT', 2, 3, 2, True),
+            
+            ('Thermodynamics', 'TD301', 'ME', 'ME', 2, 3, 4, False),
+            ('Fluid Mechanics', 'FM302', 'ME', 'ME', 2, 3, 4, False),
+            ('Fluid Mechanics Laboratory', 'FM302L', 'ME', 'ME', 2, 3, 2, True),
+            
+            ('Signals & Systems', 'SS301', 'EXTC', 'EXTC', 2, 3, 4, False),
+            ('Analog Electronics Circuit', 'AE302', 'EXTC', 'EXTC', 2, 3, 4, False),
+            
+            ('Introduction to Artificial Intelligence', 'AI301', 'AIDS', 'AIDS', 2, 3, 4, False),
+            ('Python for Data Science', 'PY302', 'AIDS', 'AIDS', 2, 3, 4, False),
+            ('Data Science Practical Lab', 'DS302L', 'AIDS', 'AIDS', 2, 3, 2, True),
+        ]
+        subjects = []
+        for name, code, d_code, c_code, year, sem, credits, is_lab in subject_configs:
+            subj, _ = Subject.objects.get_or_create(
+                college=college,
+                code=code,
+                defaults={
+                    'department': departments[d_code],
+                    'course': courses[c_code],
+                    'name': name,
+                    'year_of_study': year,
+                    'semester': sem,
+                    'credits': credits,
+                    'is_lab': is_lab,
+                    'is_active': True,
+                }
+            )
+            subjects.append(subj)
+        self.stdout.write(f'[OK] Seeded {len(subjects)} Subjects (Theory & Practical Labs).')
+        return subjects
 
-        for idx, u_obj in enumerate(stu_users):
-            m = stu_meta[idx]
-            if not m['approved']: continue
-            db_u = db_users[u_obj.email]
-            sp = db_profiles[db_u.id]
-            devs.append(DeviceRegistry(user=db_u, device_id=m['dev_norm'],
-                normalized_device_id=m['dev_norm'], device_name='Android Phone',
-                platform='android', is_active=True, is_verified=True, last_used_at=timezone.now()))
-            faces.append(FaceDescriptor(student=sp,
-                embedding=[round(random.uniform(-0.1,0.1),6) for _ in range(128)],
-                model_used='DeepFace', registered_by=sa, last_verified_at=timezone.now()))
-            fimgs.append(FaceRegistrationImage(student=sp, image_path='/media/faces/mock.jpg', angle='front'))
+    def _seed_virtual_rooms(self, college, created_by, departments):
+        rooms_data = [
+            # Name, Building, Dept_Code, Floor, Capacity, Lat, Lng
+            ('Advanced Computing Lab', 'Newton Block', 'CE', 3, 45, 18.5204, 73.8567),
+            ('DBMS Research Lab', 'Newton Block', 'CE', 3, 40, 18.5205, 73.8568),
+            ('Web Technologies Lab', 'Newton Block', 'IT', 2, 50, 18.5210, 73.8570),
+            ('Thermal Fluid Mechanics Lab', 'Tesla Block', 'ME', 1, 40, 18.5195, 73.8560),
+            ('Embedded Systems Lab', 'Edison Block', 'EXTC', 2, 35, 18.5215, 73.8580),
+            ('AI Innovation & Deep Learning Hub', 'Newton Block', 'AIDS', 4, 60, 18.5220, 73.8585),
+            ('Main Seminar Hall', 'Admin Block', 'CE', 1, 150, 18.5200, 73.8565),
+        ]
+        rooms = []
+        for name, bld, dept_code, floor, cap, lat, lng in rooms_data:
+            room, _ = VirtualRoom.objects.get_or_create(
+                college=college,
+                name=name,
+                defaults={
+                    'building': bld,
+                    'department': departments[dept_code].name, # String field
+                    'floor_number': floor,
+                    'capacity': cap,
+                    'center_lat': lat,
+                    'center_lng': lng,
+                    'is_active': True,
+                    'created_by': created_by,
+                }
+            )
+            
+            # Seed exactly 4 bounding corners for geofence validation has_polygon
+            offsets = [(-0.0001, -0.0001), (0.0001, -0.0001), (0.0001, 0.0001), (-0.0001, 0.0001)]
+            for idx, (lat_off, lng_off) in enumerate(offsets):
+                RoomCorner.objects.get_or_create(
+                    room=room,
+                    corner_index=idx,
+                    defaults={
+                        'latitude': lat + lat_off,
+                        'longitude': lng + lng_off,
+                        'altitude': 20.0,
+                        'heading': 0.0,
+                        'accuracy': 2.0,
+                        'accuracy_meters': 1.5,
+                    }
+                )
+            rooms.append(room)
+        self.stdout.write(f'[OK] Seeded {len(rooms)} Geofenced Labs/Classrooms (with corners).')
+        return rooms
 
-        DeviceRegistry.objects.bulk_create(devs)
-        FaceDescriptor.objects.bulk_create(faces)
-        FaceRegistrationImage.objects.bulk_create(fimgs)
-        self.log(f"   {len(profiles)} student profiles, {len(devs)} devices, {len(faces)} face profiles.")
+    def _seed_subject_allocations(self, college, subjects, divisions, academic_year, users):
+        allocations = []
+        
+        # We match subject courses with divisions courses to allocate them properly
+        for subj in subjects:
+            matching_divs = [d for d in divisions if d.course == subj.course and d.year_of_study == subj.year_of_study]
+            for div in matching_divs:
+                # Assign to teacher 1 or 2 based on dept
+                dept_code = subj.department.code
+                teacher = users[f'teacher_{dept_code}_1'] if 'Laboratory' not in subj.name else users[f'teacher_{dept_code}_2']
+                
+                alloc, _ = SubjectAllocation.objects.get_or_create(
+                    subject=subj,
+                    teacher=teacher,
+                    division=div,
+                    academic_year=academic_year,
+                    defaults={
+                        'college': college,
+                        'is_active': True,
+                    }
+                )
+                allocations.append(alloc)
+        self.stdout.write(f'[OK] Allocated {len(allocations)} Subjects to Faculty teachers.')
+        return allocations
 
-        # ── 12. Enrollments (pre-computed, no N+1) ──
-        self.log("12/13 Enrollments...")
-        # Build division -> [student_user_id] mapping in Python
-        div_students = {}  # div_id -> [user_id, ...]
-        for sp in profiles:
-            if sp.approval_status != 'APPROVED': continue
-            div_students.setdefault(sp.division_id, []).append(sp.user_id)
+    def _seed_timetable_grid(self, college, divisions, allocations):
+        timetable_records = []
+        days_of_week = [1, 2, 3, 4, 5]  # Mon to Fri
+        start_times = [time(9, 0), time(10, 15), time(11, 30), time(13, 30)]
+        end_times = [time(10, 15), time(11, 30), time(12, 45), time(14, 45)]
 
+        for div in divisions:
+            div_allocs = [a for a in allocations if a.division == div]
+            if not div_allocs:
+                continue
+            for day in days_of_week:
+                # Seed 2 slot mappings per day to make timetables highly realistic
+                for slot_idx in range(2):
+                    alloc = random.choice(div_allocs)
+                    tt, _ = Timetable.objects.get_or_create(
+                        college=college,
+                        division=div,
+                        subject_allocation=alloc,
+                        day_of_week=day,
+                        start_time=start_times[slot_idx],
+                        end_time=end_times[slot_idx],
+                        defaults={
+                            'room_number': f'Room-{random.randint(100, 400)}',
+                            'effective_from': date(2024, 6, 15),
+                            'effective_to': date(2024, 11, 30),
+                            'is_active': True,
+                        }
+                    )
+                    timetable_records.append(tt)
+        self.stdout.write(f'[OK] Seeded {len(timetable_records)} Timetable entries.')
+
+    def _seed_students_bulk(self, college, divisions, courses, academic_year, students_count):
+        self.stdout.write(f'Registering {students_count} students in bulk...')
+        
+        first_names = [
+            'Rahul', 'Priya', 'Amit', 'Sneha', 'Rohan', 'Anjali', 'Vikram', 'Divya', 'Sandeep', 'Neha', 
+            'Aditya', 'Pooja', 'Abhishek', 'Kiran', 'Suresh', 'Meera', 'Rajesh', 'Shruti', 'Deepak', 'Nisha', 
+            'Sunil', 'Jyoti', 'Vijay', 'Aarushi', 'Arjun', 'Tanvi', 'Manoj', 'Kavita', 'Sanjay', 'Ritu', 
+            'Pranav', 'Payal', 'Harish', 'Swati', 'Alok', 'Rashmi', 'Ganesh', 'Prachi', 'Vinay', 'Komal',
+            'Manish', 'Neha', 'Sachin', 'Sonali', 'Yash', 'Riddhi', 'Kunal', 'Ishita', 'Arvind', 'Shreya'
+        ]
+        last_names = [
+            'Sharma', 'Patil', 'Kulkarni', 'Joshi', 'Desai', 'More', 'Verma', 'Gupta', 'Singh', 'Kumar', 
+            'Mehta', 'Shah', 'Nair', 'Pillai', 'Rao', 'Reddy', 'Choudhury', 'Sen', 'Banerjee', 'Chatterjee', 
+            'Das', 'Roy', 'Bose', 'Mishra', 'Pandey', 'Trivedi', 'Vyas', 'Shastri', 'Dave', 'Chavan',
+            'Sinha', 'Kapoor', 'Malhotra', 'Bhasin', 'Grover', 'Dhillon', 'Gill', 'Jha', 'Pathak', 'Dubey'
+        ]
+
+        users_to_create = []
+        student_configs = []
+        hashed_pwd = make_password('Admin@123')
+
+        # We will distribute students evenly across active divisions
+        for idx in range(students_count):
+            first = random.choice(first_names)
+            last = random.choice(last_names)
+            email = f'stud.{first.lower()}.{last.lower()}.{idx+1000}@dec.edu'
+            prn = f'PRN2024{idx+1000:04d}'
+            roll_number = f'{(idx % 50) + 1:02d}'
+            
+            user = User(
+                id=uuid.uuid4(),
+                email=email,
+                first_name=first,
+                last_name=last,
+                phone=f'98{random.randint(10, 99)}45{random.randint(100, 999)}',
+                role='student',
+                college=college,
+                is_active=True,
+                is_approved=True,
+                password=hashed_pwd,
+            )
+            users_to_create.append(user)
+
+            # Map division configuration
+            div = divisions[idx % len(divisions)]
+            student_configs.append({
+                'user': user,
+                'prn': prn,
+                'roll_number': roll_number,
+                'division': div,
+                'course': div.course,
+                'academic_year': academic_year,
+                'year_of_study': div.year_of_study,
+            })
+
+        # Bulk create Users
+        User.objects.bulk_create(users_to_create)
+        
+        # Load the saved users back to build profiles
+        db_users = {u.email: u for u in User.objects.filter(role='student', college=college)}
+        
+        profiles_to_create = []
+        for config in student_configs:
+            saved_user = db_users[config['user'].email]
+            profile = StudentProfile(
+                user=saved_user,
+                college=college,
+                division=config['division'],
+                course=config['course'],
+                academic_year=config['academic_year'],
+                prn=config['prn'],
+                roll_number=config['roll_number'],
+                year_of_study=config['year_of_study'],
+                approval_status='APPROVED',
+                is_active=True,
+                face_registered=True, # Pre-register face embeddings
+            )
+            profiles_to_create.append(profile)
+
+        StudentProfile.objects.bulk_create(profiles_to_create)
+        self.stdout.write(f'[OK] Seeded {students_count} Student accounts & profiles in database.')
+        return StudentProfile.objects.filter(college=college)
+
+    def _seed_student_enrollments_and_biometrics(self, student_profiles, allocations, academic_year):
         enrollments = []
-        # Also pre-compute: alloc -> [user_id, ...] for attendance generation
-        alloc_students = {}
-        for c in colleges:
-            ay = ayears[c.id]
-            for al in allocs[c.id]:
-                stu_ids = div_students.get(al.division_id, [])
-                alloc_students[al.id] = stu_ids
-                for uid in stu_ids:
-                    sp = db_profiles.get(uid)
-                    if sp:
-                        enrollments.append(StudentSubjectEnrollment(
-                            student=sp, subject_allocation=al, academic_year=ay, is_active=True))
+        face_descriptors = []
+        face_images = []
+        devices = []
+
+        self.stdout.write('Generating subject enrollments and biometrics for all students...')
+        for idx, profile in enumerate(student_profiles):
+            # Select subject allocations matching the student's division
+            div_allocs = [a for a in allocations if a.division == profile.division]
+            for alloc in div_allocs:
+                enrollments.append(StudentSubjectEnrollment(
+                    student=profile,
+                    subject_allocation=alloc,
+                    academic_year=academic_year,
+                    is_active=True,
+                ))
+
+            # DeepFace / ML Kit 128-float embedding
+            fake_embedding = [random.uniform(-0.12, 0.12) for _ in range(128)]
+            face_descriptors.append(FaceDescriptor(
+                student=profile,
+                embedding=fake_embedding,
+                model_used='DeepFace-FaceNet',
+                registered_by=profile.college.users.filter(role='college_admin').first(),
+            ))
+
+            # Bounding images
+            face_images.append(FaceRegistrationImage(
+                student=profile,
+                image_path=f'https://images.unsplash.com/photo-{1500000000000 + idx}?auto=format&fit=crop&q=80&w=200',
+                angle='front',
+            ))
+
+            # Registered devices
+            devices.append(DeviceRegistry(
+                user=profile.user,
+                device_id=f'DEV{idx+5000:06d}',
+                device_name='Samsung Galaxy A32' if idx % 2 == 0 else 'OnePlus Nord CE 3',
+                platform='android',
+                is_active=True,
+                is_verified=True,
+            ))
+
         StudentSubjectEnrollment.objects.bulk_create(enrollments)
-        self.log(f"   {len(enrollments)} enrollments.")
+        FaceDescriptor.objects.bulk_create(face_descriptors)
+        FaceRegistrationImage.objects.bulk_create(face_images)
+        DeviceRegistry.objects.bulk_create(devices)
+        
+        # Link device id directly to student users
+        for idx, profile in enumerate(student_profiles):
+            profile.user.device_id = f'dev{idx+5000:06d}'
+            profile.user.save(update_fields=['device_id'])
 
-        # ── 13. Attendance Sessions & Logs ──
-        self.log("13/13 Attendance history...")
-        # Assign permanent attendance probability per student
-        stu_prob = {}
-        for sp in profiles:
-            if sp.approval_status != 'APPROVED': continue
-            r = random.random()
-            stu_prob[sp.user_id] = (random.uniform(0.90,1.0) if r < 0.60
-                                    else random.uniform(0.75,0.89) if r < 0.85
-                                    else random.uniform(0.40,0.69))
+        self.stdout.write(f'[OK] Enrolled students in {len(enrollments)} subjects and initialized bio-embeddings.')
 
-        end_dt = date.today()
-        start_dt = end_dt - timedelta(days=history_days)
-        date_list = [start_dt + timedelta(days=i)
-                     for i in range((end_dt - start_dt).days + 1)
-                     if (start_dt + timedelta(days=i)).weekday() != 6]
+    def _seed_historical_attendance(self, college, allocations, student_profiles, rooms):
+        self.stdout.write('Seeding historical 30-day attendance timeline (Ended sessions & logs)...')
+        
+        # Timeline: 30 days in the past
+        sessions_to_create = []
+        logs_to_create = []
+        
+        # Let's seed 15 historical sessions per allocation to create solid trend graphs
+        today = date.today()
+        session_codes = set()
+        
+        # Pre-assign targets to students based on roll numbers to test filters & defaulter logic cleanly:
+        # Toppers (divisible by 10): 95% target presence
+        # Regulars (rem 1 to 7): 82% target presence
+        # Defaulters (rem 8, 9): 48% target presence
+        student_targets = {}
+        for s in student_profiles:
+            rem = int(s.roll_number) % 10
+            if rem == 0:
+                student_targets[s.user.id] = 95
+            elif rem in (8, 9):
+                student_targets[s.user.id] = 48
+            else:
+                student_targets[s.user.id] = 82
 
-        sessions_objs, session_student_map = [], []
-        codes_used = set()
-        for c in colleges:
-            college_allocs = allocs[c.id]
-            college_rooms = rooms[c.id]
-            if not college_allocs or not college_rooms: continue
-            for dt in date_list:
-                picked = random.sample(college_allocs, k=min(len(college_allocs), random.randint(3, 5)))
-                for al in picked:
-                    stu_ids = alloc_students.get(al.id, [])
-                    if not stu_ids: continue
-                    while True:
-                        code = ''.join(random.choices('0123456789', k=6))
-                        if code not in codes_used: codes_used.add(code); break
-                    room = random.choice(college_rooms)
-                    hr = random.randint(9, 15)
-                    ss = datetime.combine(dt, time(hr, 0))
-                    se = datetime.combine(dt, time(hr+1, 0))
-                    sess = AttendanceSession(id=uuid.uuid4(), college=c,
-                        subject_allocation=al, virtual_room=room, teacher=al.teacher,
-                        session_code=code, status='ended',
-                        scheduled_start=timezone.make_aware(ss),
-                        scheduled_end=timezone.make_aware(se),
-                        actual_start=timezone.make_aware(ss + timedelta(minutes=random.randint(1,5))),
-                        actual_end=timezone.make_aware(se),
-                        total_students=len(stu_ids),
-                        teacher_lat=room.center_lat, teacher_lng=room.center_lng,
-                        radius_meters=30.0)
-                    sessions_objs.append(sess)
-                    session_student_map.append((sess, stu_ids, room, c))
+        for alloc in allocations:
+            # Get students enrolled in this subject allocation
+            enrolled_students = [p for p in student_profiles if p.division == alloc.division]
+            if not enrolled_students:
+                continue
 
-        AttendanceSession.objects.bulk_create(sessions_objs)
-        self.log(f"   {len(sessions_objs)} sessions created. Building logs...")
+            for day_offset in range(1, 20):  # 20 historical sessions per allocation
+                sess_date = today - timedelta(days=day_offset)
+                if sess_date.weekday() == 6:  # Skip Sundays
+                    continue
 
-        logs = []
-        for sess, stu_ids, room, c in session_student_map:
-            present_n = 0
-            for uid in stu_ids:
-                prob = stu_prob.get(uid, 0.8)
-                is_p = random.random() < prob
-                if is_p:
-                    present_n += 1
-                    sr = random.random()
-                    st = 'present' if sr < 0.85 else ('late' if sr < 0.95 else 'manual')
-                else:
-                    st = 'absent'
-                logs.append(AttendanceLog(session=sess, student_id=uid, college=c, status=st,
-                    marked_lat=room.center_lat + random.uniform(-1e-4,1e-4) if is_p else None,
-                    marked_lng=room.center_lng + random.uniform(-1e-4,1e-4) if is_p else None,
-                    gps_accuracy=3.5 if is_p else 0, is_verified_gps=is_p, is_verified_face=is_p,
-                    device_id='DEVICE-MOCK' if is_p else '',
-                    ip_address=f'192.168.1.{random.randint(2,254)}' if is_p else None))
-            sess.present_count = present_n
+                # Session code
+                while True:
+                    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                    if code not in session_codes:
+                        session_codes.add(code)
+                        break
 
-        AttendanceSession.objects.bulk_update(sessions_objs, ['present_count'])
-        for i in range(0, len(logs), 2000):
-            AttendanceLog.objects.bulk_create(logs[i:i+2000])
-        self.log(f"   {len(logs)} attendance logs created.")
+                start_dt = datetime.combine(sess_date, time(9 + (day_offset % 4), 0))
+                end_dt = start_dt + timedelta(hours=1)
+                
+                # Pick virtual room (geofence)
+                room = next((r for r in rooms if r.department == alloc.subject.department.name), rooms[0])
 
-        # ── Summary ──
-        self.stdout.write('\n' + '='*60)
-        self.log(self.style.SUCCESS('SEEDING COMPLETE'))
-        self.stdout.write('='*60)
-        self.log(f'Colleges       : {len(colleges)}')
-        self.log(f'Students       : {total_students}')
-        self.log(f'Sessions       : {len(sessions_objs)}')
-        self.log(f'Attendance Logs: {len(logs)}')
-        self.log(f'\nAll passwords  : password123')
-        self.log(f'Super Admin    : superadmin@app.com')
-        for c in colleges:
-            d = c.email_domain
-            self.log(f'\n--- {c.name} ({c.code}) ---')
-            self.log(f'  Admin     : admin@{d}')
-            self.log(f'  Principal : principal@{d}')
-            h = User.objects.filter(college=c, role='hod').first()
-            t = User.objects.filter(college=c, role='teacher', is_approved=True).first()
-            s = User.objects.filter(college=c, role='student', is_approved=True).first()
-            if h: self.log(f'  HOD       : {h.email}')
-            if t: self.log(f'  Teacher   : {t.email}')
-            if s: self.log(f'  Student   : {s.email}')
-        self.stdout.write('='*60 + '\n')
+                sess = AttendanceSession(
+                    id=uuid.uuid4(),
+                    college=college,
+                    subject_allocation=alloc,
+                    virtual_room=room,
+                    teacher=alloc.teacher,
+                    session_code=code,
+                    status='ended',
+                    scheduled_start=start_dt,
+                    scheduled_end=end_dt,
+                    actual_start=start_dt,
+                    actual_end=end_dt,
+                    total_students=len(enrolled_students),
+                )
+                sessions_to_create.append(sess)
+
+                # Generate logs
+                present_in_sess = 0
+                for stud in enrolled_students:
+                    target = student_targets[stud.user.id]
+                    is_present = random.randint(1, 100) <= target
+                    
+                    status = 'present' if is_present else 'absent'
+                    if is_present:
+                        present_in_sess += 1
+
+                    logs_to_create.append(AttendanceLog(
+                        session=sess,
+                        student=stud.user,
+                        college=college,
+                        status=status,
+                        marked_at=start_dt + timedelta(minutes=random.randint(1, 12)),
+                        marked_lat=room.center_lat,
+                        marked_lng=room.center_lng,
+                        is_verified_gps=is_present,
+                        is_verified_face=is_present,
+                        gps_accuracy=2.5 if is_present else 0.0,
+                        face_confidence=0.92 if is_present else 0.0,
+                    ))
+                
+                sess.present_count = present_in_sess
+
+        # Bulk create sessions and logs
+        AttendanceSession.objects.bulk_create(sessions_to_create)
+        
+        # Save logs (chunked to avoid postgres limits)
+        chunk_size = 5000
+        for i in range(0, len(logs_to_create), chunk_size):
+            AttendanceLog.objects.bulk_create(logs_to_create[i:i+chunk_size])
+
+        self.stdout.write(f'[OK] Seeded {len(sessions_to_create)} ended historical sessions and {len(logs_to_create)} attendance logs successfully.')
+
+    def _seed_notifications_and_notices(self, college, users, departments):
+        notifs = []
+        admin_user = users['admin']
+        
+        # High priority notice board alerts
+        notice = NoticeBoard.objects.create(
+            college=college,
+            title='End-Semester Attendance Requirements',
+            content='All students are strictly reminded that maintaining a minimum of 75% attendance per subject is mandatory to appear for final practical and theory examinations. Shortages will be reported directly to HODs.',
+            created_by=admin_user,
+            publish_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(days=30),
+            is_active=True,
+        )
+        notice.target_departments.add(departments['CE'], departments['IT'])
+
+        # Dynamic low attendance alerts for active students
+        student_users = User.objects.filter(role='student', college=college)[:10]
+        for s in student_users:
+            notifs.append(Notification(
+                college=college,
+                recipient=s,
+                sender=admin_user,
+                title='Low Attendance Alert',
+                message='Your average attendance in Computer Networks (CN501) has fallen below 75%. Please contact your class coordinator immediately.',
+                notif_type='attendance',
+                is_read=False,
+            ))
+            
+        Notification.objects.bulk_create(notifs)
+        self.stdout.write(f'[OK] Seeded notice boards and notifications.')
+
+    def _seed_audit_logs(self, college, users):
+        audits = []
+        action_samples = [
+            ('auth.login', 'User', 'Success'),
+            ('attendance.create', 'AttendanceSession', 'Created session code CN501'),
+            ('virtual_room.create', 'VirtualRoom', 'Registered geofence Room-301'),
+            ('student.approve', 'StudentProfile', 'Approved student registration'),
+        ]
+        
+        for i in range(40):
+            act, r_type, desc = random.choice(action_samples)
+            audits.append(AuditLog(
+                college=college,
+                user=users['admin'],
+                action=act,
+                resource_type=r_type,
+                resource_id=str(uuid.uuid4()),
+                ip_address='192.168.1.100',
+                device_id='DEV-AUDIT-999',
+                response_status=200,
+            ))
+        AuditLog.objects.bulk_create(audits)
+        self.stdout.write(f'[OK] Seeded system operations audit trail logs.')
+
+    def _print_production_summary(self, college, users, departments, students_count):
+        self.stdout.write('\n' + '=' * 60)
+        self.stdout.write(self.style.SUCCESS('ERP DATABASE SEEDING COMPLETED SUCCESSFULLY'))
+        self.stdout.write('=' * 60)
+        self.stdout.write(f'College             : {college.name} ({college.code})')
+        self.stdout.write(f'Domain              : {college.email_domain}')
+        self.stdout.write(f'Academic Departments: {len(departments)} successfully integrated')
+        self.stdout.write(f'Registered Students : {students_count} active profiles')
+        self.stdout.write(f'Historical Sessions : 30 days timeline queryable')
+        self.stdout.write('')
+        self.stdout.write('TEST LOGIN CREDENTIALS:')
+        self.stdout.write('-' * 60)
+        creds = [
+            ('Super Admin', 'superadmin@platform.com', 'Admin@123', 'Manage all systems'),
+            ('College Admin', 'admin@dec.edu', 'Admin@123', 'Manage college academics'),
+            ('Principal', 'principal@dec.edu', 'Admin@123', 'View college-wide reports'),
+            ('HOD (Comp Eng)', 'hod.ce@dec.edu', 'Admin@123', 'Scoped department stats'),
+            ('Teacher (Comp Eng)', 'teacher.ce1@dec.edu', 'Admin@123', 'Mark attendance / create sessions'),
+            ('Lab Assis (Comp Eng)', 'labassistant.ce@dec.edu', 'Admin@123', 'Single department scoped'),
+            ('Lab Assis (Multi-Dept)', 'labassistant.multi@dec.edu', 'Admin@123', 'CS + IT dynamic RBAC scoped'),
+        ]
+        for role, email, pwd, scope in creds:
+            self.stdout.write(f'{role:<22} | {email:<32} | {pwd:<10} | {scope}')
+        self.stdout.write('=' * 60 + '\n')

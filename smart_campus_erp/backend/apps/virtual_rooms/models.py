@@ -10,8 +10,20 @@ class VirtualRoom(models.Model):
     department = models.CharField(max_length=255, blank=True, default='')
     floor_number = models.IntegerField(default=0)
     capacity = models.IntegerField(default=60)
+    
+    # Geographic centroid
     center_lat = models.FloatField(null=True, blank=True)
     center_lng = models.FloatField(null=True, blank=True)
+    
+    # Pre-calculated High-Precision Spatial Metrics
+    area_sq_meters = models.FloatField(default=0.0)
+    perimeter_meters = models.FloatField(default=0.0)
+    orientation_degrees = models.FloatField(default=0.0)
+    reconstruction_quality = models.FloatField(default=100.0)
+    
+    # Scalable JSON field for SLAM, Unity AR anchors, BLE Beacons, and WiFi fingerprints
+    spatial_metadata = models.JSONField(default=dict, blank=True)
+    
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_rooms')
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
@@ -37,6 +49,9 @@ class RoomCorner(models.Model):
     heading = models.FloatField(default=0.0)
     accuracy = models.FloatField(default=0.0)
     accuracy_meters = models.FloatField(default=0.0)
+    
+    # Store complete accelerometer, gyroscope and compass readings during capture
+    sensor_telemetry = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = 'room_corner'

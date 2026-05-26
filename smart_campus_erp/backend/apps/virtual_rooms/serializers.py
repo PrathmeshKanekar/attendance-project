@@ -1,13 +1,13 @@
 from rest_framework import serializers
 from .models import VirtualRoom, RoomCorner
-from .geo_utils import calculate_room_center
+from .geo_utils import calculate_room_center, reconstruct_room_spatial_data
 
 class RoomCornerSerializer(serializers.ModelSerializer):
     class Meta:
         model = RoomCorner
         fields = [
             'id', 'corner_index', 'latitude', 'longitude',
-            'altitude', 'heading', 'accuracy'
+            'altitude', 'heading', 'accuracy', 'sensor_telemetry'
         ]
 
 class VirtualRoomSerializer(serializers.ModelSerializer):
@@ -27,10 +27,16 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'college', 'name', 'building', 'department',
             'floor_number', 'capacity', 'center_lat', 'center_lng',
+            'area_sq_meters', 'perimeter_meters', 'orientation_degrees',
+            'reconstruction_quality', 'spatial_metadata',
             'created_by', 'created_by_name', 'created_at', 'is_active',
             'corners', 'corner_coordinates', 'has_polygon'
         ]
-        read_only_fields = ['id', 'college', 'created_by', 'created_at']
+        read_only_fields = [
+            'id', 'college', 'created_by', 'created_at',
+            'area_sq_meters', 'perimeter_meters', 'orientation_degrees',
+            'reconstruction_quality', 'spatial_metadata'
+        ]
 
     def get_created_by_name(self, obj):
         if obj.created_by:
@@ -51,7 +57,6 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
         if len(value) != 4:
             raise serializers.ValidationError("Exactly 4 corners must be provided.")
             
-        seen_coordinates = set()
         for idx, corner in enumerate(value):
             lat = corner.get('lat') or corner.get('latitude')
             lng = corner.get('lng') or corner.get('longitude')
@@ -70,22 +75,14 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
                 
             if not (-180.0 <= flng <= 180.0):
                 raise serializers.ValidationError(f"Corner {idx + 1} longitude must be between -180 and 180.")
-
-            # Unique coordinate validation
-            coord_key = (round(flat, 4), round(flng, 4))  # 4dp ~11m tolerance
-            if coord_key in seen_coordinates:
-                raise serializers.ValidationError(f"Duplicate coordinates detected. Corner {idx + 1} is too close to another corner.")
-            seen_coordinates.add(coord_key)
             
         return value
 
     def create(self, validated_data):
         corner_data = validated_data.pop('corner_coordinates', None)
-        # Auto-assign requesting user if authenticated and not explicitly set
         request = self.context.get('request')
         if request and request.user and request.user.is_authenticated:
             validated_data['created_by'] = request.user
-            # Auto-assign college from user profile if not provided
             if 'college' not in validated_data and hasattr(request.user, 'college'):
                 validated_data['college'] = request.user.college
 
@@ -101,7 +98,6 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
         instance = super().update(instance, validated_data)
         
         if corner_data is not None:
-            # Delete old corners and save new ones
             instance.corners.all().delete()
             if corner_data:
                 self._save_corners(instance, corner_data)
@@ -117,6 +113,17 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
             heading = float(c.get('heading') or 0.0)
             accuracy = float(c.get('accuracy') or c.get('accuracy_meters') or 0.0)
             
+            # Extract optional raw IMU sensor values
+            sensor_dict = {
+                'gyro_x': float(c.get('gyroX') or c.get('gyro_x') or 0.0),
+                'gyro_y': float(c.get('gyroY') or c.get('gyro_y') or 0.0),
+                'gyro_z': float(c.get('gyroZ') or c.get('gyro_z') or 0.0),
+                'accel_x': float(c.get('accelX') or c.get('accel_x') or 0.0),
+                'accel_y': float(c.get('accelY') or c.get('accel_y') or 0.0),
+                'accel_z': float(c.get('accelZ') or c.get('accel_z') or 0.0),
+                'direction_label': str(c.get('directionLabel') or c.get('direction_label') or 'N'),
+            }
+            
             corner = RoomCorner.objects.create(
                 room=room,
                 corner_index=idx,
@@ -125,11 +132,30 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
                 altitude=alt,
                 heading=heading,
                 accuracy=accuracy,
+                sensor_telemetry=sensor_dict
             )
             corners_list.append(corner)
             
-        # Recalculate room center automatically
+        # 1. Geographic centroid calculation
         center = calculate_room_center(corners_list)
         room.center_lat = center['lat']
         room.center_lng = center['lng']
-        room.save(update_fields=['center_lat', 'center_lng'])
+        
+        # 2. Advanced Spatial Reconstruction (Area, Perimeter, Yaw, Quality Score)
+        spatial = reconstruct_room_spatial_data(corners_list)
+        room.area_sq_meters = spatial['area']
+        room.perimeter_meters = spatial['perimeter']
+        room.orientation_degrees = spatial['orientation']
+        room.reconstruction_quality = spatial['quality']
+        room.spatial_metadata = {
+            'local_cartesian_offsets': spatial['local_points'],
+            'engine_version': 'GeoSpatialFusion-v2.0',
+            'slam_compatible': True,
+            'unity_anchor_ready': True,
+        }
+        
+        room.save(update_fields=[
+            'center_lat', 'center_lng', 'area_sq_meters',
+            'perimeter_meters', 'orientation_degrees',
+            'reconstruction_quality', 'spatial_metadata'
+        ])

@@ -447,7 +447,7 @@ class ActiveSessionsView(APIView):
 
             return Response(result)
 
-        elif user.role in ('teacher', 'lab_assistant'):
+        elif user.role == 'teacher':
             sessions = AttendanceSession.objects.select_related(
                 'subject_allocation__subject',
                 'subject_allocation__division',
@@ -456,6 +456,22 @@ class ActiveSessionsView(APIView):
                 status  = 'active',
                 teacher = user,
             )
+            return Response(
+                AttendanceSessionSerializer(sessions, many=True).data
+            )
+
+        elif user.role == 'lab_assistant':
+            from apps.accounts.rbac import filter_by_assigned_department
+            sessions = AttendanceSession.objects.select_related(
+                'subject_allocation__subject',
+                'subject_allocation__division',
+                'virtual_room',
+                'teacher',
+            ).filter(
+                status  = 'active',
+                college = user.college,
+            )
+            sessions = filter_by_assigned_department(user, sessions, 'subject_allocation__division__course__department')
             return Response(
                 AttendanceSessionSerializer(sessions, many=True).data
             )
@@ -562,9 +578,9 @@ class CheckLocationView(APIView):
         )
 
         return Response({
-            'is_inside'           : True, # ALWAYS True to bypass client-side blocking
-            'inside_2d'           : True, # ALWAYS True to bypass client-side blocking
-            'altitude_ok'         : True, # ALWAYS True to bypass client-side blocking
+            'is_inside'           : geo.get('is_valid', False),
+            'inside_2d'           : geo.get('inside_2d', False),
+            'altitude_ok'         : geo.get('altitude_ok', True),
             'real_is_inside'      : geo.get('is_valid', False),
             'real_inside_2d'      : geo.get('inside_2d', False),
             'real_altitude_ok'    : geo.get('altitude_ok', True),
@@ -576,6 +592,7 @@ class CheckLocationView(APIView):
             'session_code'        : session.session_code,
             'subject_name'        : session.subject_allocation.subject.name,
             'room_name'           : room.name if room else 'Classroom Area',
+            'is_mocked'           : data.get('is_mocked', False),
         })
 
 
@@ -749,8 +766,28 @@ class MarkAttendanceView(APIView):
             'student_lng': float(data['lng']),
             'distance_to_teacher_meters': dist_to_teacher,
             'room_boundary_check': geo_info,
-            'geofence_status': 'bypassed_for_attendance_marking',
+            'geofence_status': 'enforced_and_verified',
         }
+
+        # Enforce Real-Time Geofence Validation
+        if data.get('is_mocked', False):
+            return Response(
+                {
+                    'error': 'Mock location or location spoofing suspected on device level.',
+                    'step_failed': 'spoofing',
+                },
+                status=403,
+            )
+
+        if not geo_info.get('is_valid', False):
+            return Response(
+                {
+                    'error': 'Unauthorized. You are physically outside the classroom area boundary.',
+                    'step_failed': 'geofence',
+                    'distance_to_boundary': geo_info.get('distance_to_boundary', 0.0),
+                },
+                status=403,
+            )
 
         # ── STEP 3: Duplicate check ────────────────────────
         if AttendanceLog.objects.filter(
@@ -864,6 +901,8 @@ class MarkAttendanceView(APIView):
                     marked_lng       = data['lng'],
                     marked_altitude  = data['altitude'],
                     device_id        = device_id,
+                    gps_accuracy     = float(data.get('accuracy', 0.0)),
+                    is_mocked_gps    = data.get('is_mocked', False),
                     face_confidence  = face_result['confidence'],
                     blink_count      = blink_count,
                     compass_direction = data.get('compass_direction', 0.0),
@@ -984,12 +1023,22 @@ class SessionLogsView(APIView):
 
     def get(self, request, session_id):
         try:
-            session = AttendanceSession.objects.get(
+            session = AttendanceSession.objects.select_related(
+                'subject_allocation__division__course__department'
+            ).get(
                 id      = session_id,
                 college = request.user.college,
             )
         except AttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found.'}, status=404)
+
+        # Security check for lab_assistant
+        if request.user.role == 'lab_assistant':
+            from apps.accounts.rbac import get_lab_assistant_departments
+            assigned_depts = get_lab_assistant_departments(request.user)
+            session_dept = session.subject_allocation.division.course.department
+            if session_dept not in assigned_depts:
+                return Response({"error": "You do not have permission to view logs for this department's sessions."}, status=403)
 
         # Production Requirement: Teacher should see all students in the division
         # Get all students enrolled/assigned to this division

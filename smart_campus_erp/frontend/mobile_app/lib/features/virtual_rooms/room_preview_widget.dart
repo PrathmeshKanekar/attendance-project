@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
-import 'models/virtual_room_model.dart';
 import 'room_capture_overlay.dart';
+import 'services/room_reconstruction_engine.dart';
 
 class RoomPreviewWidget extends StatelessWidget {
   final List<RoomCornerReading> corners;
@@ -10,7 +10,7 @@ class RoomPreviewWidget extends StatelessWidget {
   const RoomPreviewWidget({
     Key? key,
     required this.corners,
-    this.height = 250.0,
+    this.height = 280.0,
   }) : super(key: key);
 
   @override
@@ -23,7 +23,7 @@ class RoomPreviewWidget extends StatelessWidget {
         height: height,
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isDark ? const Color(0xFF334155) : Colors.grey.shade200,
           ),
@@ -33,16 +33,24 @@ class RoomPreviewWidget extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                Icons.layers_clear_rounded,
-                color: theme.disabledColor.withOpacity(0.5),
-                size: 48,
+                Icons.spatial_tracking_rounded,
+                color: theme.disabledColor.withOpacity(0.4),
+                size: 56,
               ),
               const SizedBox(height: 12),
               Text(
-                'No corners captured yet',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.textTheme.bodyMedium?.color?.withOpacity(0.5),
-                  fontWeight: FontWeight.w500,
+                'Awaiting Corner Captures',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.disabledColor,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Walk to corners and capture GPS + Sensor fusion data.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.disabledColor.withOpacity(0.7),
                 ),
               ),
             ],
@@ -51,35 +59,45 @@ class RoomPreviewWidget extends StatelessWidget {
       );
     }
 
+    // Attempt reconstruction to display metadata directly
+    ReconstructedRoom? reconstructed;
+    try {
+      reconstructed = RoomReconstructionEngine.reconstruct(corners);
+    } catch (e) {
+      debugPrint('Reconstruction error: $e');
+    }
+
     return Container(
       height: height,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: theme.primaryColor.withOpacity(0.2),
+          color: theme.primaryColor.withOpacity(0.25),
           width: 1.5,
         ),
       ),
       child: Stack(
         children: [
-          // Centered grid effect
+          // 1. Grid Background
           Positioned.fill(
             child: CustomPaint(
               painter: _GridPainter(
                 gridColor: isDark
-                    ? Colors.white.withOpacity(0.03)
-                    : Colors.black.withOpacity(0.02),
+                    ? Colors.white.withOpacity(0.04)
+                    : Colors.black.withOpacity(0.03),
               ),
             ),
           ),
-          // Canvas rendering the shape
+          
+          // 2. Blueprint Canvas Painter
           Positioned.fill(
             child: ClipRect(
               child: CustomPaint(
-                painter: _RoomShapePainter(
+                painter: _BlueprintPainter(
                   corners: corners,
+                  reconstructed: reconstructed,
                   primaryColor: theme.primaryColor,
                   accentColor: theme.colorScheme.secondary,
                   isDark: isDark,
@@ -87,29 +105,136 @@ class RoomPreviewWidget extends StatelessWidget {
               ),
             ),
           ),
-          // Bottom HUD info
+
+          // 3. Top HUD Dial (Quality & Compass Heading)
+          if (reconstructed != null) ...[
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: (isDark ? const Color(0xFF1E293B) : Colors.white).withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: Row(
+                  children: [
+                    // Heading Arrow Indicator
+                    Transform.rotate(
+                      angle: -reconstructed.orientationAngleDegrees * math.pi / 180.0,
+                      child: const Icon(Icons.navigation_rounded, size: 14, color: Colors.redAccent),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${reconstructed.orientationAngleDegrees.toStringAsFixed(0)}° N',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: theme.primaryColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          // 4. Bottom HUD Info Card
           Positioned(
             left: 8,
             bottom: 8,
+            right: 8,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: (isDark ? const Color(0xFF1E293B) : Colors.white)
-                    .withOpacity(0.9),
-                borderRadius: BorderRadius.circular(8),
+                color: (isDark ? const Color(0xFF1E293B) : Colors.white).withOpacity(0.9),
+                borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 4,
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8,
                   )
                 ],
               ),
-              child: Text(
-                'Captured Corners: ${corners.length}/4',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: theme.primaryColor,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'SPATIAL AREA',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: theme.disabledColor,
+                        ),
+                      ),
+                      Text(
+                        reconstructed != null
+                            ? '${reconstructed.areaSqMeters.toStringAsFixed(1)} m²'
+                            : 'Pending (4 Corners)',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: theme.primaryColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'PERIMETER',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: theme.disabledColor,
+                        ),
+                      ),
+                      Text(
+                        reconstructed != null
+                            ? '${reconstructed.perimeter.toStringAsFixed(1)} meters'
+                            : '${corners.length}/4 corners',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'QUALITY',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: theme.disabledColor,
+                        ),
+                      ),
+                      Text(
+                        reconstructed != null
+                            ? '${reconstructed.qualityScore.toStringAsFixed(0)}%'
+                            : 'CALIBRATING',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: reconstructed != null && reconstructed.qualityScore >= 80
+                              ? Colors.tealAccent.shade400
+                              : Colors.orangeAccent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -121,7 +246,6 @@ class RoomPreviewWidget extends StatelessWidget {
 
 class _GridPainter extends CustomPainter {
   final Color gridColor;
-
   _GridPainter({required this.gridColor});
 
   @override
@@ -130,7 +254,7 @@ class _GridPainter extends CustomPainter {
       ..color = gridColor
       ..strokeWidth = 1.0;
 
-    const spacing = 20.0;
+    const spacing = 18.0;
     for (double x = 0; x < size.width; x += spacing) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }
@@ -143,14 +267,16 @@ class _GridPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-class _RoomShapePainter extends CustomPainter {
+class _BlueprintPainter extends CustomPainter {
   final List<RoomCornerReading> corners;
+  final ReconstructedRoom? reconstructed;
   final Color primaryColor;
   final Color accentColor;
   final bool isDark;
 
-  _RoomShapePainter({
+  _BlueprintPainter({
     required this.corners,
+    required this.reconstructed,
     required this.primaryColor,
     required this.accentColor,
     required this.isDark,
@@ -160,7 +286,7 @@ class _RoomShapePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (corners.isEmpty) return;
 
-    // 1. Calculate boundaries (bounding box)
+    // 1. Calculate bounding box of coordinates to fit and center the blueprint
     double minLat = double.infinity;
     double maxLat = -double.infinity;
     double minLng = double.infinity;
@@ -173,77 +299,127 @@ class _RoomShapePainter extends CustomPainter {
       if (c.longitude > maxLng) maxLng = c.longitude;
     }
 
-    // Handle single corner or identical corners division by zero
     double latSpan = maxLat - minLat;
     double lngSpan = maxLng - minLng;
     if (latSpan == 0) latSpan = 0.0001;
     if (lngSpan == 0) lngSpan = 0.0001;
 
-    // 2. Compute normalized points fit to canvas with padding
-    const padding = 32.0;
+    // We add padding so the lines don't clip at the canvas edge
+    const padding = 45.0;
     final drawWidth = size.width - (padding * 2);
-    final drawHeight = size.height - (padding * 2);
+    final drawHeight = size.height - (padding * 2) - 40; // Shift up to clear bottom HUD
 
-    List<Offset> points = [];
-    for (final c in corners) {
-      // Invert Y axis for screen representation (latitude is y, longitude is x)
+    // 2. Normalize and project points
+    List<Offset> screenPoints = [];
+    final activeCornersList = reconstructed != null ? reconstructed!.orderedCorners : corners;
+
+    for (final c in activeCornersList) {
       double normX = padding + ((c.longitude - minLng) / lngSpan) * drawWidth;
       double normY = padding + (1.0 - ((c.latitude - minLat) / latSpan)) * drawHeight;
-      points.add(Offset(normX, normY));
+      screenPoints.add(Offset(normX, normY));
     }
 
-    // 3. Draw polygon fill & border
+    // 3. Draw Polygon Wall fills
     final fillPaint = Paint()
-      ..color = primaryColor.withOpacity(0.12)
+      ..color = primaryColor.withOpacity(0.08)
       ..style = PaintingStyle.fill;
 
-    final borderPaint = Paint()
+    final wallPaint = Paint()
       ..color = primaryColor
-      ..strokeWidth = 2.5
+      ..strokeWidth = 3.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
     final path = Path();
-    if (points.isNotEmpty) {
-      path.moveTo(points[0].dx, points[0].dy);
-      for (int i = 1; i < points.length; i++) {
-        path.lineTo(points[i].dx, points[i].dy);
+    if (screenPoints.isNotEmpty) {
+      path.moveTo(screenPoints[0].dx, screenPoints[0].dy);
+      for (int i = 1; i < screenPoints.length; i++) {
+        path.lineTo(screenPoints[i].dx, screenPoints[i].dy);
       }
-      if (points.length == 4) {
+      if (corners.length == 4) {
         path.close();
       }
     }
 
-    if (points.length > 1) {
+    if (screenPoints.length > 1) {
       canvas.drawPath(path, fillPaint);
-      canvas.drawPath(path, borderPaint);
+      canvas.drawPath(path, wallPaint);
     }
 
-    // 4. Draw markers at each corner
-    final markerFillPaint = Paint()..color = isDark ? const Color(0xFF1E293B) : Colors.white;
+    // 4. Draw edge length labels in meters (only if reconstructed coordinates exist)
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    if (reconstructed != null && screenPoints.length == 4) {
+      for (int i = 0; i < 4; i++) {
+        final p1 = screenPoints[i];
+        final p2 = screenPoints[(i + 1) % 4];
+        final midPt = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
+        
+        final wallLen = reconstructed!.wallLengths[i];
+        textPainter.text = TextSpan(
+          text: '${wallLen.toStringAsFixed(1)}m',
+          style: TextStyle(
+            color: isDark ? Colors.tealAccent.shade400 : Colors.teal.shade800,
+            fontSize: 9.5,
+            fontWeight: FontWeight.bold,
+            backgroundColor: (isDark ? const Color(0xFF0F172A) : Colors.white).withOpacity(0.8),
+          ),
+        );
+        textPainter.layout();
+        // Shift label slightly away from midpoint to prevent wall overlap
+        canvas.drawCircle(midPt, 2.0, Paint()..color = Colors.tealAccent);
+        textPainter.paint(
+          canvas, 
+          Offset(midPt.dx - (textPainter.width / 2), midPt.dy - (textPainter.height / 2) - 8),
+        );
+      }
+    }
+
+    // 5. Draw Centroid Mark
+    if (screenPoints.length == 4) {
+      double sumX = 0;
+      double sumY = 0;
+      for (final pt in screenPoints) {
+        sumX += pt.dx;
+        sumY += pt.dy;
+      }
+      final centerPt = Offset(sumX / 4, sumY / 4);
+      final centerPaint = Paint()..color = Colors.tealAccent.shade700;
+
+      canvas.drawCircle(centerPt, 4.0, centerPaint);
+      canvas.drawCircle(
+        centerPt,
+        9.0,
+        Paint()
+          ..color = Colors.tealAccent.shade700.withOpacity(0.3)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+    }
+
+    // 6. Draw Corner Markers with dynamic indices
+    final markerFillPaint = Paint()..color = const Color(0xFF1E293B);
     final markerBorderPaint = Paint()
       ..color = accentColor
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
+      ..strokeWidth = 2.0;
 
-    final textPainter = TextPainter(
-      textDirection: TextDirection.ltr,
-    );
+    for (int i = 0; i < screenPoints.length; i++) {
+      final pt = screenPoints[i];
+      canvas.drawCircle(
+        pt,
+        9.0,
+        Paint()
+          ..color = accentColor.withOpacity(0.25)
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(pt, 6.0, markerFillPaint);
+      canvas.drawCircle(pt, 6.0, markerBorderPaint..style = PaintingStyle.stroke);
 
-    for (int i = 0; i < points.length; i++) {
-      final pt = points[i];
-      // Draw outer circle glow
-      canvas.drawCircle(pt, 10.0, Paint()..color = accentColor.withOpacity(0.3));
-      canvas.drawCircle(pt, 7.0, markerFillPaint);
-      canvas.drawCircle(pt, 7.0, markerBorderPaint);
-
-      // Draw index number
       textPainter.text = TextSpan(
         text: '${i + 1}',
         style: TextStyle(
           color: accentColor,
-          fontSize: 10.0,
+          fontSize: 9.0,
           fontWeight: FontWeight.bold,
         ),
       );
@@ -253,34 +429,10 @@ class _RoomShapePainter extends CustomPainter {
         Offset(pt.dx - (textPainter.width / 2), pt.dy - (textPainter.height / 2)),
       );
     }
-
-    // 5. Draw centroid center mark if exactly 4 corners
-    if (points.length == 4) {
-      double sumX = 0;
-      double sumY = 0;
-      for (final pt in points) {
-        sumX += pt.dx;
-        sumY += pt.dy;
-      }
-      final centerPt = Offset(sumX / 4, sumY / 4);
-      final centerPaint = Paint()
-        ..color = Colors.tealAccent.shade700
-        ..style = PaintingStyle.fill;
-
-      canvas.drawCircle(centerPt, 4.0, centerPaint);
-      canvas.drawCircle(
-        centerPt,
-        8.0,
-        Paint()
-          ..color = Colors.tealAccent.shade700.withOpacity(0.2)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
-      );
-    }
   }
 
   @override
-  bool shouldRepaint(covariant _RoomShapePainter oldDelegate) {
+  bool shouldRepaint(covariant _BlueprintPainter oldDelegate) {
     return oldDelegate.corners.length != corners.length ||
         oldDelegate.primaryColor != primaryColor ||
         oldDelegate.accentColor != accentColor ||

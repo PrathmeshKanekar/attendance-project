@@ -309,3 +309,124 @@ def check_inside_room(student_lat, student_lng, student_alt,
         logger.error('Slack boundary check error: %s', e)
         # Fail-safe: DENY on unexpected errors
         return _deny(f'Boundary slack check failed: {e}')
+
+
+def reconstruct_room_spatial_data(corners_list):
+    """
+    Reconstructs spatial parameters of the room using its 4 corners.
+    Calculates: area, perimeter, orientation, quality and returns a dictionary.
+    """
+    if len(corners_list) != 4:
+        return {
+            'area': 0.0,
+            'perimeter': 0.0,
+            'orientation': 0.0,
+            'quality': 100.0,
+            'local_points': []
+        }
+    
+    try:
+        # Extract lat/lng
+        pts = []
+        accuracies = []
+        for c in corners_list:
+            if hasattr(c, 'latitude'):
+                lat = float(getattr(c, 'latitude', 0.0))
+                lng = float(getattr(c, 'longitude', 0.0))
+                acc = float(getattr(c, 'accuracy', 0.0))
+            else:
+                lat = float(c.get('lat') or c.get('latitude') or 0.0)
+                lng = float(c.get('lng') or c.get('longitude') or 0.0)
+                acc = float(c.get('accuracy') or 0.0)
+            pts.append((lat, lng))
+            accuracies.append(acc)
+            
+        # 1. Centroid
+        centroid_lat = sum(p[0] for p in pts) / 4.0
+        centroid_lng = sum(p[1] for p in pts) / 4.0
+        
+        # 2. Clockwise sort vertices around centroid
+        sorted_pts = sorted(pts, key=lambda p: math.atan2(p[0] - centroid_lat, p[1] - centroid_lng), reverse=True)
+        
+        # 3. Project to Local Cartesian space (meters)
+        lat_rad = math.radians(centroid_lat)
+        meters_per_degree_lat = 110574.0
+        meters_per_degree_lng = 111320.0 * math.cos(lat_rad)
+        
+        local_pts = []
+        for p in sorted_pts:
+            x = (p[1] - centroid_lng) * meters_per_degree_lng
+            y = (p[0] - centroid_lat) * meters_per_degree_lat
+            local_pts.append((x, y))
+            
+        # 4. Enclosed Area (Shoelace Formula)
+        shoelace_sum = 0.0
+        for i in range(4):
+            next_idx = (i + 1) % 4
+            shoelace_sum += (local_pts[i][0] * local_pts[next_idx][1]) - (local_pts[next_idx][0] * local_pts[i][1])
+        area = abs(shoelace_sum) / 2.0
+        
+        # 5. Wall Lengths & Perimeter
+        wall_lengths = []
+        perimeter = 0.0
+        for i in range(4):
+            next_idx = (i + 1) % 4
+            dx = local_pts[next_idx][0] - local_pts[i][0]
+            dy = local_pts[next_idx][1] - local_pts[i][1]
+            length = math.sqrt(dx*dx + dy*dy)
+            wall_lengths.append(length)
+            perimeter += length
+            
+        # 6. Orientation (angle of longest wall segment relative to True North)
+        max_len = -1.0
+        longest_wall_idx = 0
+        for i in range(4):
+            if wall_lengths[i] > max_len:
+                max_len = wall_lengths[i]
+                longest_wall_idx = i
+        
+        p1 = local_pts[longest_wall_idx]
+        p2 = local_pts[(longest_wall_idx + 1) % 4]
+        radians = math.atan2(p2[0] - p1[0], p2[1] - p1[1])
+        orientation = (math.degrees(radians) + 360.0) % 360.0
+        
+        # 7. Quality Score
+        quality = 100.0
+        avg_acc = sum(accuracies) / 4.0
+        if avg_acc > 5.0:
+            quality -= (avg_acc - 5.0) * 2.0
+            
+        # Non-convexity check
+        is_convex = True
+        for i in range(4):
+            p0 = local_pts[i]
+            p1 = local_pts[(i + 1) % 4]
+            p2 = local_pts[(i + 2) % 4]
+            cross = (p1[0] - p0[0]) * (p2[1] - p1[1]) - (p1[1] - p0[1]) * (p2[0] - p1[0])
+            if i == 0:
+                first_sign = cross > 0
+            else:
+                if (cross > 0) != first_sign:
+                    is_convex = False
+                    break
+        if not is_convex:
+            quality -= 30.0
+            
+        quality = max(10.0, min(100.0, quality))
+        
+        return {
+            'area': area,
+            'perimeter': perimeter,
+            'orientation': orientation,
+            'quality': quality,
+            'local_points': [{'x': p[0], 'y': p[1]} for p in local_pts]
+        }
+    except Exception as e:
+        logger.error('reconstruct_room_spatial_data error: %s', e)
+        return {
+            'area': 0.0,
+            'perimeter': 0.0,
+            'orientation': 0.0,
+            'quality': 50.0,
+            'local_points': []
+        }

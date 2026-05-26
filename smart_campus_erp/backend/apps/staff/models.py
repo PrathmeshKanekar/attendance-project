@@ -20,3 +20,16 @@ class StaffProfile(models.Model):
     def __str__(self):
         return f"{self.user.get_full_name()} ({self.employee_id})"
 
+
+class LabAssistantDepartment(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='lab_departments')
+    department = models.ForeignKey('academic.Department', on_delete=models.CASCADE, related_name='lab_assistants')
+    is_active = models.BooleanField(default=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'department')
+        db_table = 'staff_lab_assistant_department'
+
+    def __str__(self):
+        return f"{self.user.email} -> {self.department.name}"

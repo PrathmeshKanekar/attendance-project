@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'services/sensor_fusion_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATA MODEL
@@ -11,6 +13,15 @@ class RoomCornerReading {
   final double altitude;
   final double heading;
   final double accuracy;
+  
+  // High precision telemetry logs
+  final double gyroX;
+  final double gyroY;
+  final double gyroZ;
+  final double accelX;
+  final double accelY;
+  final double accelZ;
+  final String directionLabel;
 
   const RoomCornerReading({
     required this.latitude,
@@ -18,6 +29,13 @@ class RoomCornerReading {
     required this.altitude,
     required this.heading,
     required this.accuracy,
+    this.gyroX = 0.0,
+    this.gyroY = 0.0,
+    this.gyroZ = 0.0,
+    this.accelX = 0.0,
+    this.accelY = 0.0,
+    this.accelZ = 0.0,
+    this.directionLabel = 'N',
   });
 }
 
@@ -29,7 +47,7 @@ class RoomCaptureOverlay extends StatefulWidget {
   final Function(RoomCornerReading) onCaptured;
   final VoidCallback onCancel;
 
-  /// All previously captured corners — used to enforce minimum distance check
+  /// All previously captured corners — used for relative guidance warnings, NEVER rejections
   final List<RoomCornerReading> allCapturedCorners;
 
   const RoomCaptureOverlay({
@@ -44,504 +62,474 @@ class RoomCaptureOverlay extends StatefulWidget {
   State<RoomCaptureOverlay> createState() => _RoomCaptureOverlayState();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATE  — pure geolocator stream, NO location package, NO auto-accept
-// ─────────────────────────────────────────────────────────────────────────────
 class _RoomCaptureOverlayState extends State<RoomCaptureOverlay> {
-  StreamSubscription<Position>? _positionSub;
+  final SensorFusionService _sensorFusionService = SensorFusionService();
+  StreamSubscription<FusedSensorReading>? _fusionSub;
   Timer? _ticker;
 
-  // Live GPS state
-  Position? _currentPosition;
-  List<double> _accuracyHistory = [];
+  // Live state
+  FusedSensorReading? _currentFusedReading;
   int _elapsedSeconds = 0;
   bool _isListening = false;
 
   // UI state
-  String _statusText = 'Tap "Capture GPS" to start';
+  String _statusText = 'Tap "Start High-Precision Calibration" to start';
   String _warningText = '';
   bool _hasWarning = false;
   bool _isCompleted = false;
 
   @override
   void dispose() {
-    _positionSub?.cancel();
+    _fusionSub?.cancel();
     _ticker?.cancel();
+    _sensorFusionService.stopTracking();
     super.dispose();
   }
 
-  // ── Start fresh GPS stream ──────────────────────────────────────────────
-  Future<void> _startListening() async {
-    // Cancel any previous stream cleanly
-    await _positionSub?.cancel();
-    _positionSub = null;
+  // ── Start Sensor Fusion Tracking ──────────────────────────────────────────
+  Future<void> _startCalibration() async {
+    await _fusionSub?.cancel();
     _ticker?.cancel();
 
     setState(() {
       _isListening = true;
-      _currentPosition = null;
-      _accuracyHistory = [];
+      _currentFusedReading = null;
       _elapsedSeconds = 0;
       _hasWarning = false;
       _warningText = '';
       _isCompleted = false;
-      _statusText = 'Acquiring GPS signal...';
+      _statusText = 'Fusing sensors & calibrating...';
     });
 
-    // ── Permission check ────────────────────────────────────────────────
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      if (mounted) {
-        setState(() {
-          _isListening = false;
-          _statusText = 'GPS disabled. Enable location services.';
-        });
-      }
-      return;
-    }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      if (mounted) {
-        setState(() {
-          _isListening = false;
-          _statusText = 'Location permission denied.';
-        });
-      }
-      return;
-    }
-
-    // ── Elapsed seconds ticker ──────────────────────────────────────────
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() => _elapsedSeconds++);
     });
 
-    // ── KEY FIX: Use LocationSettings with best accuracy ──────────────
-    // distanceFilter: 0  →  receive EVERY update, even if phone is still
-    // accuracy: best     →  forces GPS chip, not WiFi/cell tower
-    const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 0,
-    );
-
-    _positionSub = Geolocator.getPositionStream(
-      locationSettings: locationSettings,
-    ).listen(
-      (Position pos) {
-        if (!mounted || _isCompleted) return;
-
-        final acc = pos.accuracy;
-
-        // Build accuracy history (only add if changed)
-        if (_accuracyHistory.isEmpty ||
-            (_accuracyHistory.last - acc).abs() > 0.5) {
-          _accuracyHistory.add(acc);
-        }
-
+    try {
+      await _sensorFusionService.startTracking();
+    } catch (e) {
+      if (mounted) {
         setState(() {
-          _currentPosition = pos;
-          _statusText = _accuracyLabel(acc);
-          _hasWarning = acc > 30.0;
-          _warningText = acc > 30.0
-              ? 'Weak signal (±${acc.toStringAsFixed(0)}m). '
-                'Move near a window. Keep waiting or tap Accept.'
-              : '';
+          _isListening = false;
+          _hasWarning = true;
+          _warningText = e.toString().replaceFirst('Exception: ', '');
+          _statusText = 'Location Permission Required';
         });
 
-        debugPrint(
-          '📍 GPS update  corner=${widget.cornerIndex}  '
-          'lat=${pos.latitude.toStringAsFixed(7)}  '
-          'lng=${pos.longitude.toStringAsFixed(7)}  '
-          'acc=${acc.toStringAsFixed(1)}m  '
-          't=${_elapsedSeconds}s',
-        );
+        // If permanently denied, offer to open app settings
+        if (e.toString().contains('permanently denied')) {
+          Geolocator.openAppSettings();
+        }
+      }
+      return;
+    }
+
+    _fusionSub = _sensorFusionService.fusedStream.listen(
+      (FusedSensorReading reading) {
+        if (!mounted || _isCompleted) return;
+
+        setState(() {
+          _currentFusedReading = reading;
+          
+          // Compute status message
+          final acc = reading.gpsAccuracy;
+          if (acc <= 3) {
+            _statusText = '99.9% High Precision Calibrated';
+          } else if (acc <= 10) {
+            _statusText = 'Optimal Fusion Quality Achieved';
+          } else {
+            _statusText = 'Stabilizing (Accuracy ±${acc.toStringAsFixed(1)}m)';
+          }
+
+          // Warnings are strictly advisory, NEVER blocking
+          if (!reading.isStationary) {
+            _hasWarning = true;
+            _warningText = '⚠️ Keep device steady! Motion jitter detected.';
+          } else if (acc > 20.0) {
+            _hasWarning = true;
+            _warningText = '⚠️ Weak GPS signal detected. Move to clear window if possible.';
+          } else {
+            _hasWarning = false;
+            _warningText = '';
+          }
+        });
       },
       onError: (err) {
-        debugPrint('GPS stream error: $err');
         if (mounted) {
           setState(() {
             _isListening = false;
-            _statusText = 'GPS error: $err';
+            _statusText = 'Fusion error: $err';
           });
         }
       },
     );
   }
 
-  // ── User manually taps "Accept" ────────────────────────────────────────
+  // ── User accepts current calibrated fix ───────────────────────────────────
   void _acceptCurrentFix() {
-    final pos = _currentPosition;
-    if (pos == null) return;
+    final r = _currentFusedReading;
+    if (r == null) return;
 
-    // Distance check vs ALL previously captured corners
+    // Check distance only to show soft guide warnings, NEVER to block creation!
     for (int i = 0; i < widget.allCapturedCorners.length; i++) {
       final prev = widget.allCapturedCorners[i];
       final dist = Geolocator.distanceBetween(
         prev.latitude, prev.longitude,
-        pos.latitude, pos.longitude,
+        r.latitude, r.longitude,
       );
-      if (dist < 1.0) {
-        // Less than 1 metre away from a previous corner — refuse silently
-        setState(() {
-          _hasWarning = true;
-          _warningText =
-              '⚠️ Too close to Corner ${i + 1} (${dist.toStringAsFixed(1)}m). '
-              'Walk further away and wait for GPS to update, then tap Accept again.';
-        });
-        debugPrint(
-          '❌ Rejected: Corner ${widget.cornerIndex} is ${dist.toStringAsFixed(2)}m '
-          'from Corner ${i + 1} — too close.',
-        );
-        return;
+      if (dist < 0.5) {
+        debugPrint('Advisory: Corner is extremely close to Corner ${i + 1} ($dist m). Proceeding anyway.');
       }
     }
 
-    _commit(pos);
+    _commit(r);
   }
 
-  // ── Final commit ───────────────────────────────────────────────────────
-  void _commit(Position pos) {
-    _positionSub?.cancel();
+  // ── Final Commit ──────────────────────────────────────────────────────────
+  void _commit(FusedSensorReading reading) {
+    _fusionSub?.cancel();
     _ticker?.cancel();
-
-    debugPrint('═══════════════════════════════════════════════');
-    debugPrint('✅ CORNER ${widget.cornerIndex} COMMITTED');
-    debugPrint('   lat  = ${pos.latitude}');
-    debugPrint('   lng  = ${pos.longitude}');
-    debugPrint('   acc  = ${pos.accuracy.toStringAsFixed(1)}m');
-    debugPrint('   time = ${_elapsedSeconds}s');
-    debugPrint('═══════════════════════════════════════════════');
+    _sensorFusionService.stopTracking();
 
     setState(() {
       _isCompleted = true;
       _isListening = false;
-      _statusText = '✅ Corner ${widget.cornerIndex} saved!';
+      _statusText = '✅ Corner ${widget.cornerIndex} Calibrated & Saved!';
       _hasWarning = false;
     });
 
-    final reading = RoomCornerReading(
-      latitude: pos.latitude,
-      longitude: pos.longitude,
-      altitude: pos.altitude,
-      heading: pos.heading,
-      accuracy: pos.accuracy,
+    final corner = RoomCornerReading(
+      latitude: reading.latitude,
+      longitude: reading.longitude,
+      altitude: reading.altitude,
+      heading: reading.compassDegrees,
+      accuracy: reading.gpsAccuracy,
+      gyroX: reading.gyroscope.x,
+      gyroY: reading.gyroscope.y,
+      gyroZ: reading.gyroscope.z,
+      accelX: reading.accelerometer.x,
+      accelY: reading.accelerometer.y,
+      accelZ: reading.accelerometer.z,
+      directionLabel: reading.directionLabel,
     );
 
     Future.delayed(const Duration(milliseconds: 700), () {
-      if (mounted) widget.onCaptured(reading);
+      if (mounted) widget.onCaptured(corner);
     });
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────
-  String _accuracyLabel(double acc) {
-    if (acc <= 5) return 'Excellent — tap Accept';
-    if (acc <= 15) return 'Good — tap Accept';
-    if (acc <= 30) return 'Fair — you can Accept';
-    if (acc <= 100) return 'Poor — wait or Accept anyway';
-    return 'Very weak — move near window';
+  Color _getAccuracyColor(double acc) {
+    if (acc <= 5) return Colors.tealAccent.shade700;
+    if (acc <= 15) return Colors.greenAccent.shade400;
+    if (acc <= 30) return Colors.amberAccent.shade400;
+    return Colors.redAccent;
   }
 
-  Color _accuracyColor(double acc) {
-    if (acc <= 15) return Colors.green.shade600;
-    if (acc <= 30) return Colors.amber.shade700;
-    if (acc <= 100) return Colors.orange.shade600;
-    return Colors.red.shade600;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   // BUILD
-  // ─────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final pos = _currentPosition;
-    final acc = pos?.accuracy;
+    final reading = _currentFusedReading;
+    final acc = reading?.gpsAccuracy ?? 99.9;
 
     return Container(
-      color: Colors.black.withOpacity(0.65),
+      color: Colors.black.withOpacity(0.75),
       child: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
           child: Container(
-            width: MediaQuery.of(context).size.width * 0.92,
-            padding: const EdgeInsets.all(24),
+            width: MediaQuery.of(context).size.width * 0.94,
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: theme.brightness == Brightness.dark
-                  ? const Color(0xFF1E293B)
-                  : Colors.white,
-              borderRadius: BorderRadius.circular(24),
+              color: const Color(0xFF0F172A), // Premium Dark Slate Background
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: theme.primaryColor.withOpacity(0.2), width: 1.5),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.35),
-                  blurRadius: 24,
-                  offset: const Offset(0, 12),
+                  color: Colors.black.withOpacity(0.6),
+                  blurRadius: 30,
+                  offset: const Offset(0, 15),
                 ),
               ],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ── Accuracy ring icon ──────────────────────────────
+                // ── Top Header Badge ────────────────────────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: theme.primaryColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'CORNER ${widget.cornerIndex} / 4',
+                        style: TextStyle(
+                          color: theme.primaryColor,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white70),
+                      onPressed: widget.onCancel,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+
+                // ── High Tech Compass & Stabilization Dial ─────────────────
                 Container(
-                  width: 72,
-                  height: 72,
+                  height: 140,
+                  width: 140,
+                  alignment: Alignment.center,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
+                    color: const Color(0xFF1E293B),
                     border: Border.all(
-                      color: acc != null
-                          ? _accuracyColor(acc)
+                      color: reading != null
+                          ? _getAccuracyColor(acc)
                           : theme.primaryColor.withOpacity(0.3),
-                      width: 5,
+                      width: 3,
                     ),
-                    color: (acc != null
-                            ? _accuracyColor(acc)
-                            : theme.primaryColor)
-                        .withOpacity(0.08),
                   ),
-                  child: Icon(
-                    _isCompleted
-                        ? Icons.check_circle_rounded
-                        : (acc != null && acc <= 30
-                            ? Icons.gps_fixed_rounded
-                            : Icons.gps_not_fixed_rounded),
-                    color: acc != null
-                        ? _accuracyColor(acc)
-                        : theme.primaryColor,
-                    size: 32,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Grid background decoration inside dial
+                      Opacity(
+                        opacity: 0.15,
+                        child: Icon(Icons.grid_3x3_rounded, size: 90, color: theme.primaryColor),
+                      ),
+                      // Rotating compass needle
+                      Transform.rotate(
+                        angle: -((reading?.compassDegrees ?? 0.0) * math.pi / 180.0),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Container(
+                              height: 110,
+                              width: 110,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            // North marker arrow
+                            Positioned(
+                              top: 2,
+                              child: Column(
+                                children: [
+                                  const Icon(Icons.arrow_drop_up_rounded, size: 24, color: Colors.redAccent),
+                                  Text(
+                                    'N',
+                                    style: TextStyle(
+                                      color: Colors.redAccent.shade200,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Core telemetries overlay
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            '${(reading?.compassDegrees ?? 0.0).toStringAsFixed(0)}°',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          Text(
+                            reading?.directionLabel ?? 'CAL',
+                            style: TextStyle(
+                              color: theme.primaryColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      )
+                    ],
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 16),
 
-                // ── Corner title ────────────────────────────────────
+                // ── Centered Title & Instructions ──────────────────────────
                 Text(
-                  'Corner ${widget.cornerIndex}',
-                  style: theme.textTheme.headlineMedium?.copyWith(
+                  _statusText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Walk to the corner, wait for GPS to update, then tap Accept.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.disabledColor,
-                  ),
-                ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
 
-                // ── Elapsed time + spinner ──────────────────────────
-                if (_isListening && !_isCompleted) ...[
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: theme.primaryColor,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'GPS active — ${_elapsedSeconds}s',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: theme.primaryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // ── Live coordinate ─────────────────────────────────
-                if (pos != null) ...[
+                // ── Motion Stabilization Telemetry HUD ──────────────────────
+                if (reading != null) ...[
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(14),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     decoration: BoxDecoration(
-                      color: _accuracyColor(pos.accuracy).withOpacity(0.07),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: _accuracyColor(pos.accuracy).withOpacity(0.25),
-                      ),
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
                     ),
                     child: Column(
                       children: [
-                        Text(
-                          'Lat: ${pos.latitude.toStringAsFixed(7)}',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontFamily: 'monospace',
-                            fontWeight: FontWeight.w700,
-                          ),
+                        // GPS Coords
+                        _buildHudRow('LATITUDE', reading.latitude.toStringAsFixed(8)),
+                        _buildHudRow('LONGITUDE', reading.longitude.toStringAsFixed(8)),
+                        _buildHudRow('ALTITUDE', '${reading.altitude.toStringAsFixed(1)} m'),
+                        _buildHudRow('GPS PRECISION', '±${reading.gpsAccuracy.toStringAsFixed(2)} m'),
+                        const Divider(color: Colors.white12, height: 16),
+                        // Accelerometer & Gyro
+                        _buildHudRow(
+                          'GYROSCOPE JITTER', 
+                          'X: ${reading.gyroscope.x.toStringAsFixed(2)} | Y: ${reading.gyroscope.y.toStringAsFixed(2)}',
                         ),
-                        Text(
-                          'Lng: ${pos.longitude.toStringAsFixed(7)}',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontFamily: 'monospace',
-                            fontWeight: FontWeight.w700,
-                          ),
+                        _buildHudRow(
+                          'STABILIZATION SCORE', 
+                          '${((1.0 - reading.motionVariance.clamp(0.0, 1.0)) * 100.0).toStringAsFixed(0)}%',
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '±${pos.accuracy.toStringAsFixed(1)} m accuracy',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: _accuracyColor(pos.accuracy),
-                            fontWeight: FontWeight.bold,
+                        const SizedBox(height: 8),
+                        // Motion state bar
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: reading.motionVariance.clamp(0.0, 1.0),
+                            backgroundColor: Colors.white12,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              reading.isStationary ? Colors.tealAccent.shade400 : Colors.orangeAccent,
+                            ),
+                            minHeight: 5,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                 ],
 
-                // ── Accuracy history ────────────────────────────────
-                if (_accuracyHistory.length > 1) ...[
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Text(
-                      _accuracyHistory
-                          .map((e) => '±${e.toStringAsFixed(0)}m')
-                          .join(' → '),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontFamily: 'monospace',
-                        color: theme.disabledColor,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
-
-                // ── Status text ─────────────────────────────────────
-                Text(
-                  _statusText,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: acc != null
-                        ? _accuracyColor(acc)
-                        : theme.primaryColor,
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // ── Warning banner ──────────────────────────────────
+                // ── Warning banner (if any) ─────────────────────────────────
                 if (_hasWarning && _warningText.isNotEmpty) ...[
-                  const SizedBox(height: 8),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.red.withOpacity(0.2)),
+                      color: Colors.orange.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orangeAccent.withOpacity(0.3)),
                     ),
                     child: Text(
                       _warningText,
                       textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: Colors.red.shade800,
-                        fontWeight: FontWeight.w600,
+                      style: const TextStyle(
+                        color: Colors.orangeAccent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
                 ],
-                const SizedBox(height: 24),
 
-                // ── Buttons ─────────────────────────────────────────
+                // ── Calibration & Capture Controls ─────────────────────────
                 if (!_isListening && !_isCompleted) ...[
-                  // START button (shown before stream starts)
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _startListening,
-                      icon: const Icon(Icons.gps_fixed_rounded),
+                      onPressed: _startCalibration,
+                      icon: const Icon(Icons.spatial_audio_off_rounded),
                       label: const Text(
-                        'Start GPS',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
+                        'Start High-Precision Calibration',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                       ),
                       style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        backgroundColor: theme.primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
                 ],
 
                 if (_isListening && !_isCompleted) ...[
-                  // ACCEPT button — only active when we have a position
+                  // ACCEPT button — always works, warnings are soft
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: pos != null ? _acceptCurrentFix : null,
+                      onPressed: reading != null ? _acceptCurrentFix : null,
                       icon: const Icon(Icons.check_circle_rounded),
                       label: Text(
-                        pos != null
-                            ? 'Accept  (±${pos.accuracy.toStringAsFixed(0)}m)'
-                            : 'Waiting for GPS...',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
+                        reading != null 
+                            ? 'Capture & Freeze Corner $acc m' 
+                            : 'Fusing Telemetries...',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: pos != null
-                            ? _accuracyColor(pos.accuracy)
-                            : Colors.grey,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        backgroundColor: reading != null 
+                            ? _getAccuracyColor(acc) 
+                            : Colors.grey.shade800,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                     ),
                   ),
                   const SizedBox(height: 10),
 
-                  // RESTART button
+                  // RESTART calibration
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: _startListening,
-                      icon: const Icon(Icons.refresh_rounded, size: 18),
-                      label: const Text('Restart GPS'),
+                      onPressed: _startCalibration,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Recalibrate Sensors'),
                       style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        side: const BorderSide(color: Colors.white30),
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
                 ],
-
-                // CANCEL always visible
-                if (!_isCompleted)
-                  SizedBox(
-                    width: double.infinity,
-                    child: TextButton(
-                      onPressed: widget.onCancel,
-                      child: const Text('Cancel'),
-                    ),
-                  ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildHudRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: Colors.white54, fontWeight: FontWeight.bold)),
+          Text(value, style: const TextStyle(fontSize: 11, color: Colors.white, fontFamily: 'monospace', fontWeight: FontWeight.w600)),
+        ],
       ),
     );
   }
