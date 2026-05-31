@@ -117,6 +117,7 @@ class MarkAttendanceSerializer(serializers.Serializer):
     device_id      = serializers.CharField(max_length=255)
     face_image_b64    = serializers.CharField()
     blink_count       = serializers.IntegerField(min_value=3)
+    is_mocked         = serializers.BooleanField(required=False, default=False)
     compass_direction = serializers.FloatField(required=False, default=0.0, min_value=0, max_value=360)
     device_movement   = serializers.CharField(required=False, allow_blank=True, default='', max_length=1000)
 
@@ -140,10 +141,20 @@ class MarkAttendanceSerializer(serializers.Serializer):
         return value
 
     def validate_device_id(self, value):
+        if not value:
+            raise serializers.ValidationError('Device ID cannot be empty.')
+        
+        # Trim leading and trailing whitespace
+        val = value.strip()
+        
         import re
-        if not re.match(r'^[a-zA-Z0-9\-\:_]{5,255}$', value):
+        # Allow alphanumeric, hyphen, underscore, colon, slash, dot, equals, spaces, and braces
+        # Format: e.g. UUIDs, Android Build IDs, iOS IDFVs, Web hash/string
+        if not re.match(r'^[a-zA-Z0-9\-\:_/\.={}\[\] ]{5,255}$', val):
             raise serializers.ValidationError('Invalid device identifier format.')
-        return value
+        
+        from apps.accounts.models import normalize_device_id
+        return normalize_device_id(val)
 
 
 class CheckLocationSerializer(serializers.Serializer):
@@ -152,6 +163,8 @@ class CheckLocationSerializer(serializers.Serializer):
     lng        = serializers.FloatField(min_value=-180, max_value=180)
     altitude   = serializers.FloatField(default=0.0, min_value=-100, max_value=9000)
     accuracy   = serializers.FloatField(default=10.0, min_value=0, max_value=500)
+    is_mocked  = serializers.BooleanField(required=False, default=False)
+    sensors    = serializers.JSONField(required=False, default=dict)
 
 
 class ManualAttendanceSerializer(serializers.Serializer):

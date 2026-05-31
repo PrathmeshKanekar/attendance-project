@@ -1,5 +1,5 @@
-
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -21,10 +21,13 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   CameraController? _controller;
   FaceDetector? _faceDetector;
   bool _isBusy = false;
+  bool _isCompleting = false;
+  int _lastProcessTime = 0;
+  
+  // FIXED: Liveness Scan Blink Bug - Synchronous Local Instance Tracking Task 3
   int _blinkCount = 0;
-  bool _eyesClosed = false;           // FIXED: unified closed state Task 3
+  bool _eyesClosed = false;           
   DateTime? _blinkStartTime;
-  static const _blinkCooldownMs = 500; // FIXED: prevent double-counting Task 3
 
   @override
   void initState() {
@@ -36,30 +39,60 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     final cameras = await availableCameras();
     final front = cameras.firstWhere((c) => c.lensDirection == CameraLensDirection.front);
     
-    _controller = CameraController(front, ResolutionPreset.medium, enableAudio: false);
+    _controller = CameraController(
+      front,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      // CRITICAL FIX: Request NV21 on Android — single interleaved plane.
+      // YUV420 delivers 3 separate planes that require fragile manual
+      // interleaving which fails on many OEMs (Xiaomi, Realme, etc.).
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
+    );
     await _controller!.initialize();
     
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
-        enableClassification: true,
-        enableTracking: true,
+        enableClassification: true,   // REQUIRED for eye/smile probability
+        enableLandmarks:      false,  // FIXED: Disable to completely eliminate "unknown landmark type" log warnings
+        enableContours:       false,  // Contour-based, disabled for speed
+        enableTracking:       true,   // Track faces frame-over-frame
+        minFaceSize:          0.15,   // Eliminate noise from tiny faces
+        performanceMode:      FaceDetectorMode.accurate, // Stable and highly accurate eye probability
       ),
     );
 
-    _controller!.startImageStream(_processImage);
-    if (mounted) setState(() {});
+    if (mounted && !_isCompleting) {
+      _controller!.startImageStream(_processImage);
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
-    _controller?.stopImageStream();
+    _isBusy = true;
+    _isCompleting = true;
+    try {
+      if (_controller != null && _controller!.value.isStreamingImages) {
+        _controller?.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint("Error stopping image stream: $e");
+    }
     _controller?.dispose();
     _faceDetector?.close();
     super.dispose();
   }
 
   Future<void> _processImage(CameraImage image) async {
-    if (_isBusy) return;
+    if (_isBusy || _isCompleting) return;
+    
+    // Throttle frames to avoid CPU overload (approx 6.6 FPS)
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastProcessTime < 150) return;
+    _lastProcessTime = now;
+
     _isBusy = true;
 
     try {
@@ -68,6 +101,8 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
 
       final faces = await _faceDetector!.processImage(inputImage);
       
+      if (_isCompleting) return;
+
       if (faces.isNotEmpty) {
         final face = faces.first;
         if (!mounted) return;
@@ -89,11 +124,10 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
   }
 
   bool _validateFacePosition(Face face, CameraImage image) {
-    if (!mounted) return false;
+    if (!mounted || _isCompleting) return false;
     final boundingBox = face.boundingBox;
     
     // 1. Check Face Size (Must be close enough)
-    // Face width should be at least 30% of image width
     final faceWidthRatio = boundingBox.width / image.width;
     if (faceWidthRatio < 0.3) {
       context.read<AttendanceCubit>().updateFaceGuidance("Move closer to camera", false);
@@ -104,7 +138,6 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     final centerX = boundingBox.center.dx;
     final centerY = boundingBox.center.dy;
     
-    // Relative position (0.0 to 1.0)
     final relX = centerX / image.width;
     final relY = centerY / image.height;
 
@@ -118,81 +151,186 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
     return true;
   }
 
+  // FIXED: Liveness Scan Blink Bug - Synchronous Local Instance Tracking Task 3
   void _checkBlink(Face face) {
+    if (_isCompleting) return;
+
     final leftOpen  = face.leftEyeOpenProbability  ?? 1.0;
     final rightOpen = face.rightEyeOpenProbability ?? 1.0;
 
-    const closedThresh = 0.20;
-    const openThresh   = 0.55;
+    const closedThresh = 0.30; // slightly more tolerant
 
     final eitherClosed = leftOpen < closedThresh || rightOpen < closedThresh;
-    final bothOpen     = leftOpen > openThresh   && rightOpen > openThresh;
 
     if (eitherClosed && !_eyesClosed) {
       // Blink START — eyes just closed
       _eyesClosed     = true;
       _blinkStartTime = DateTime.now();
       debugPrint("BLINK START: L=${leftOpen.toStringAsFixed(2)} R=${rightOpen.toStringAsFixed(2)}");
-    } else if (_eyesClosed && bothOpen) {
+    } else if (!eitherClosed && _eyesClosed) {
       // Blink END — eyes reopened
-      if (_blinkStartTime == null) {
-        _eyesClosed = false;
-        return;
-      }
+      _eyesClosed = false;
+      if (_blinkStartTime == null) return;
+      
       final elapsed = DateTime.now().difference(_blinkStartTime!).inMilliseconds;
 
-      // Valid blink: eyes were closed for at least 80ms (natural blink) and cooldown met
-      if (elapsed >= 80 && elapsed <= _blinkCooldownMs) {
-        _eyesClosed = false;
+      // Valid blink: eyes were closed for a reasonable amount of time
+      if (elapsed >= 50 && elapsed < 2000) {
         _blinkCount++;
         debugPrint("BLINK COUNTED: $_blinkCount (duration: ${elapsed}ms)");
 
         if (mounted) {
           setState(() {}); // refresh _BlinkIndicator count display
           context.read<AttendanceCubit>().onBlinkDetected(_blinkCount);
+          
+          if (_blinkCount >= 3) {
+            _onLivenessSuccess();
+          }
         }
       } else {
-        // Too fast or too slow — noise/artifact, reset without counting
-        _eyesClosed = false;
         debugPrint("BLINK IGNORED (duration: ${elapsed}ms)");
       }
     }
   }
 
+  Future<void> _onLivenessSuccess() async {
+    if (_isCompleting) return;
+    _isCompleting = true;
+
+    debugPrint("LIVENESS SUCCESS: Stopping camera streams and capturing final image.");
+
+    try {
+      // 1. Stop streaming immediately to avoid processing new frames
+      if (_controller != null && _controller!.value.isStreamingImages) {
+        await _controller!.stopImageStream();
+      }
+
+      String base64Image = "";
+
+      // 2. Capture final image under perfect conditions
+      if (_controller != null && _controller!.value.isInitialized) {
+        final imageFile = await _controller!.takePicture();
+        final bytes = await imageFile.readAsBytes();
+        base64Image = base64Encode(bytes);
+      }
+
+      // 3. Close the face detector to free resources
+      await _faceDetector?.close();
+
+      // 4. Update Cubit state to faceMatch/submission & execute attendance submission automatically
+      if (mounted) {
+        final cubit = context.read<AttendanceCubit>();
+        await cubit.onFaceMatched();
+        await cubit.submitAttendance(base64Image, {
+          'sensor_heading': 0.0,
+        });
+      }
+    } catch (e) {
+      debugPrint("Error during liveness completion: $e");
+    }
+  }
+
+  // ── PRODUCTION-GRADE CameraImage → InputImage CONVERSION ──────────────
+  //
+  // WHY THE OLD CODE FAILED:
+  // 1. ImageFormatGroup.yuv420 delivers 3 separate planes (Y, U, V)
+  // 2. The _yuv420ToNv21() interleaver had pixel-stride bugs on many OEMs
+  // 3. Result: corrupted buffer → ML Kit sees garbage → "Face not detected"
+  //
+  // THE FIX:
+  // - Request NV21 format directly (single interleaved plane in planes[0])
+  // - Hardcode format detection by raw value (17 = NV21, 35 = YUV_420_888)
+  // - Never use InputImageFormatValue.fromRawValue() which returns null on
+  //   some ML Kit plugin versions for raw value 17
+
+  /// Android NV21 raw format value from android.graphics.ImageFormat
+  static const int _kNv21RawValue = 17;
+  /// Android YUV_420_888 raw format value
+  static const int _kYuv420RawValue = 35;
+
   InputImage? _inputImageFromCameraImage(CameraImage image) {
     try {
+      if (image.planes.isEmpty) return null;
+
+      // ── Compute rotation ──────────────────────────────────────────────
       final sensorOrientation = _controller!.description.sensorOrientation;
-      InputImageRotation? rotation;
+      InputImageRotation rotation;
       if (Platform.isAndroid) {
         switch (sensorOrientation) {
+          case 0:   rotation = InputImageRotation.rotation0deg; break;
           case 90:  rotation = InputImageRotation.rotation90deg; break;
           case 180: rotation = InputImageRotation.rotation180deg; break;
           case 270: rotation = InputImageRotation.rotation270deg; break;
-          default:  rotation = InputImageRotation.rotation0deg; break;
+          default:  rotation = InputImageRotation.rotation270deg; break;
         }
+      } else {
+        rotation = InputImageRotationValue.fromRawValue(sensorOrientation)
+            ?? InputImageRotation.rotation0deg;
       }
-      rotation ??= InputImageRotation.rotation0deg;
 
-      final format = InputImageFormatValue.fromRawValue(image.format.raw);
-      if (format == null) return null;
+      // ── Android conversion ────────────────────────────────────────────
+      if (Platform.isAndroid) {
+        final int rawFormat = image.format.raw;
 
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in image.planes) {
-        allBytes.putUint8List(plane.bytes);
+        // NV21 (raw = 17): Single interleaved buffer in planes[0].
+        // This is the expected path when imageFormatGroup = nv21.
+        // DO NOT concatenate planes — planes[0] already contains full data.
+        if (rawFormat == _kNv21RawValue) {
+          return InputImage.fromBytes(
+            bytes: image.planes[0].bytes,
+            metadata: InputImageMetadata(
+              size: Size(image.width.toDouble(), image.height.toDouble()),
+              rotation: rotation,
+              format: InputImageFormat.nv21,
+              bytesPerRow: image.planes[0].bytesPerRow,
+            ),
+          );
+        }
+
+        // YUV_420_888 (raw = 35): Some OEMs deliver this even when NV21 requested.
+        // Concatenate all planes — ML Kit handles YUV_420_888 natively.
+        if (rawFormat == _kYuv420RawValue) {
+          final WriteBuffer allBytes = WriteBuffer();
+          for (final plane in image.planes) {
+            allBytes.putUint8List(plane.bytes);
+          }
+          final bytes = allBytes.done().buffer.asUint8List();
+          return InputImage.fromBytes(
+            bytes: bytes,
+            metadata: InputImageMetadata(
+              size: Size(image.width.toDouble(), image.height.toDouble()),
+              rotation: rotation,
+              format: InputImageFormat.yuv_420_888,
+              bytesPerRow: image.planes[0].bytesPerRow,
+            ),
+          );
+        }
+
+        // Fallback: treat as NV21 using planes[0]
+        debugPrint('CameraVerification: Unknown format raw=$rawFormat, trying NV21');
+        return InputImage.fromBytes(
+          bytes: image.planes[0].bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: rotation,
+            format: InputImageFormat.nv21,
+            bytesPerRow: image.planes[0].bytesPerRow,
+          ),
+        );
       }
-      final bytes = allBytes.done().buffer.asUint8List();
 
+      // ── iOS conversion (BGRA8888) ─────────────────────────────────────
       return InputImage.fromBytes(
-        bytes: bytes,
+        bytes: image.planes[0].bytes,
         metadata: InputImageMetadata(
           size: Size(image.width.toDouble(), image.height.toDouble()),
           rotation: rotation,
-          format: format,
+          format: InputImageFormat.bgra8888,
           bytesPerRow: image.planes[0].bytesPerRow,
         ),
       );
     } catch (e) {
-      debugPrint("Error in _inputImageFromCameraImage: $e");
+      debugPrint('Error in _inputImageFromCameraImage: $e');
       return null;
     }
   }
@@ -285,7 +423,10 @@ class _CameraVerificationWidgetState extends State<CameraVerificationWidget> {
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
             
-            if ((state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch) && state.isInsideRoom)
+            // FIXED: Student UI Button Gate - Button visible only when gpsValidation is success AND isInsideRoom is true Task 2
+            if ((state.currentStep == AttendanceStep.finalSubmission || state.currentStep == AttendanceStep.faceMatch) &&
+                state.stepStatuses[AttendanceStep.gpsValidation] == StepStatus.success &&
+                state.isInsideRoom)
               Padding(
                 padding: const EdgeInsets.only(top: 24),
                 child: ElevatedButton(

@@ -14,6 +14,7 @@ class UserModel {
   final String? deviceId;
   final bool    isApproved;
   final bool    isActive;
+  final List<Map<String, dynamic>> departments;
 
   const UserModel({
     required this.id,
@@ -31,9 +32,16 @@ class UserModel {
     this.deviceId,
     required this.isApproved,
     required this.isActive,
+    this.departments = const [],
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
+    var deptsList = <Map<String, dynamic>>[];
+    if (json['departments'] != null && json['departments'] is List) {
+      deptsList = (json['departments'] as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    }
     return UserModel(
       id           : json['id']?.toString() ?? '',
       email        : json['email']?.toString() ?? '',
@@ -50,6 +58,7 @@ class UserModel {
       deviceId     : json['device_id']?.toString(),
       isApproved   : json['is_approved'] == true,
       isActive     : json['is_active'] == true,
+      departments  : deptsList,
     );
   }
 
@@ -69,6 +78,7 @@ class UserModel {
     'device_id'    : deviceId,
     'is_approved'  : isApproved,
     'is_active'    : isActive,
+    'departments'  : departments,
   };
 
   bool get isStudent      => role == 'student';

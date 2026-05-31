@@ -12,6 +12,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     college_code = serializers.SerializerMethodField()
     prn          = serializers.SerializerMethodField()
     full_name    = serializers.SerializerMethodField()
+    departments  = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -20,6 +21,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'role', 'phone', 'profile_photo',
             'college_id', 'college_name', 'college_code',
             'prn', 'device_id', 'is_approved', 'is_active',
+            'departments',
         ]
 
     def get_college_id(self, obj):
@@ -39,6 +41,45 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return f'{obj.first_name} {obj.last_name}'
+
+    def get_departments(self, obj):
+        if obj.role == 'lab_assistant':
+            return [
+                {
+                    'id': str(assignment.department.id),
+                    'name': assignment.department.name,
+                    'code': assignment.department.code
+                }
+                for assignment in obj.lab_departments.filter(is_active=True)
+            ]
+        elif obj.role in ['super_admin', 'college_admin', 'principal']:
+            from apps.academic.models import Department
+            return [
+                {
+                    'id': str(dept.id),
+                    'name': dept.name,
+                    'code': dept.code
+                }
+                for dept in Department.objects.filter(college=obj.college)
+            ]
+        elif obj.role == 'hod':
+            profile = getattr(obj, 'staff_profile', None)
+            if profile and profile.department:
+                return [{
+                    'id': str(profile.department.id),
+                    'name': profile.department.name,
+                    'code': profile.department.code
+                }]
+            return []
+        elif obj.role == 'teacher':
+            profile = getattr(obj, 'staff_profile', None)
+            if profile and profile.department:
+                return [{
+                    'id': str(profile.department.id),
+                    'name': profile.department.name,
+                    'code': profile.department.code
+                }]
+        return []
 
 
 class CreateUserSerializer(serializers.ModelSerializer):

@@ -99,10 +99,12 @@ class IsTeacher(BasePermission):
 
 class IsStudent(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role == 'student'
-        )
+        if not request.user.is_authenticated or request.user.role != 'student':
+            return False
+        try:
+            return request.user.student_profile.approval_status == 'APPROVED'
+        except AttributeError:
+            return False
 
     def has_object_permission(self, request, view, obj):
         return IsSameCollege().has_object_permission(request, view, obj)

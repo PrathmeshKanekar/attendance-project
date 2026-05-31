@@ -33,9 +33,11 @@ dependencies:
   # Location
   geolocator: ^14.0.2
   permission_handler: ^11.3.1
+  location: ^6.0.0
 
   # Device info
   device_info_plus: ^10.1.0
+  flutter_jailbreak_detection: ^1.10.0
 
   # UI & Charts
   google_fonts: ^6.2.1
@@ -55,6 +57,8 @@ dependencies:
   pdf: ^3.12.0
   excel: ^4.0.6
   share_plus: ^12.0.2
+  flutter_unity_widget: ^2022.2.1
+  file_picker: ^11.0.2
 
 dev_dependencies:
   flutter_test:

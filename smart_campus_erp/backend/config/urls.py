@@ -13,22 +13,26 @@ urlpatterns = [
     path('api/academic/', include('apps.academic.urls')),
     path('api/', include('apps.academic.urls')),
     path('api/students/', include('apps.students.urls')),
+    path('api/lab-assistant/', include('apps.students.urls_lab_assistant')),
     path('api/attendance/', include('apps.attendance.urls')),
     path('api/face/', include('apps.face_recognition.urls')),
     path('api/virtual-rooms/', include('apps.virtual_rooms.urls')),
     path('api/reports/', include('apps.reports.urls')),
     path('api/notifications/', include('apps.notifications.urls')),
     path('api/approvals/', include('apps.approvals.urls')),
+    path('api/devices/', include('apps.accounts.urls_devices')),
     
     # ── API V1 (Future Proofing) ──────────────────────────────────
     path('api/v1/accounts/', include('apps.accounts.urls')),
     path('api/v1/tenants/', include('apps.tenants.urls')),
     path('api/v1/academic/', include('apps.academic.urls')),
     path('api/v1/students/', include('apps.students.urls')),
+    path('api/v1/lab-assistant/', include('apps.students.urls_lab_assistant')),
     path('api/v1/attendance/', include('apps.attendance.urls')),
     path('api/v1/virtual-rooms/', include('apps.virtual_rooms.urls')),
     path('api/v1/reports/', include('apps.reports.urls')),
     path('api/v1/approvals/', include('apps.approvals.urls')),
+    path('api/v1/devices/', include('apps.accounts.urls_devices')),
     
     # ── DOCUMENTATION ──────────────────────────────────────────────
     path('api/docs/schema/', SpectacularAPIView.as_view(), name='schema'),

@@ -102,6 +102,11 @@ class NavConfig {
             icon  : Icons.face_retouching_natural_rounded,
             route : '/admin/face-register',
           ),
+          NavItem(
+            label : 'Approvals',
+            icon  : Icons.check_circle_rounded,
+            route : '/admin/approvals',
+          ),
         ];
 
       case 'principal':

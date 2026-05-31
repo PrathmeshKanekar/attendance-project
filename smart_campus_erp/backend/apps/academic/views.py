@@ -34,13 +34,22 @@ def college_scope(user, qs, field='college'):
 # ══════════════════════════════════════════════════════════
 
 class DepartmentListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return []
+        return [IsAuthenticated()]
 
     def get(self, request):
-        qs = college_scope(
-            request.user,
-            Department.objects.select_related('hod').filter(is_active=True)
-        )
+        college_id = request.query_params.get('college_id')
+        if request.user.is_authenticated:
+            qs = college_scope(
+                request.user,
+                Department.objects.select_related('hod').filter(is_active=True)
+            )
+        elif college_id:
+            qs = Department.objects.select_related('hod').filter(college_id=college_id, is_active=True)
+        else:
+            return Response([])
         search = request.query_params.get('search', '')
         if search:
             qs = qs.filter(name__icontains=search)
@@ -132,13 +141,22 @@ class DepartmentDetailView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class CourseListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return []
+        return [IsAuthenticated()]
 
     def get(self, request):
-        qs = college_scope(
-            request.user,
-            Course.objects.select_related('department').filter(is_active=True),
-        )
+        college_id = request.query_params.get('college_id')
+        if request.user.is_authenticated:
+            qs = college_scope(
+                request.user,
+                Course.objects.select_related('department').filter(is_active=True),
+            )
+        elif college_id:
+            qs = Course.objects.select_related('department').filter(college_id=college_id, is_active=True)
+        else:
+            return Response([])
         dept_id = request.query_params.get('department')
         if dept_id:
             qs = qs.filter(department_id=dept_id)
@@ -236,14 +254,23 @@ class CourseDetailView(APIView):
 # ══════════════════════════════════════════════════════════
 
 class AcademicYearListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return []
+        return [IsAuthenticated()]
 
     def get(self, request):
-        qs = college_scope(
-            request.user,
-            AcademicYear.objects.all(),
-        ).order_by('-start_date')
-        return Response(AcademicYearSerializer(qs, many=True).data)
+        college_id = request.query_params.get('college_id')
+        if request.user.is_authenticated:
+            qs = college_scope(
+                request.user,
+                AcademicYear.objects.all(),
+            )
+        elif college_id:
+            qs = AcademicYear.objects.filter(college_id=college_id)
+        else:
+            return Response([])
+        return Response(AcademicYearSerializer(qs.order_by('-start_date'), many=True).data)
 
     def post(self, request):
         if request.user.role not in ['college_admin', 'super_admin']:

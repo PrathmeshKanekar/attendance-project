@@ -1,649 +1,534 @@
-// room_capture_overlay.dart
-// ─────────────────────────────────────────────────────────────────────────────
-// Full-screen camera overlay for capturing 4 physical room corners.
-// Reads GPS + compass + accelerometer + gyroscope + magnetometer simultaneously.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import 'dart:async';
 import 'dart:math' as math;
-
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:sensors_plus/sensors_plus.dart';
+import 'services/sensor_fusion_service.dart';
 
-import '../../core/constants/app_colors.dart';
-import 'models/corner_data.dart';
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA MODEL
+// ─────────────────────────────────────────────────────────────────────────────
+class RoomCornerReading {
+  final double latitude;
+  final double longitude;
+  final double altitude;
+  final double heading;
+  final double accuracy;
+  
+  // High precision telemetry logs
+  final double gyroX;
+  final double gyroY;
+  final double gyroZ;
+  final double accelX;
+  final double accelY;
+  final double accelZ;
+  final String directionLabel;
 
+  const RoomCornerReading({
+    required this.latitude,
+    required this.longitude,
+    required this.altitude,
+    required this.heading,
+    required this.accuracy,
+    this.gyroX = 0.0,
+    this.gyroY = 0.0,
+    this.gyroZ = 0.0,
+    this.accelX = 0.0,
+    this.accelY = 0.0,
+    this.accelZ = 0.0,
+    this.directionLabel = 'N',
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WIDGET
+// ─────────────────────────────────────────────────────────────────────────────
 class RoomCaptureOverlay extends StatefulWidget {
-  final Function(List<CornerData>) onCaptureComplete;
+  final int cornerIndex;
+  final Function(RoomCornerReading) onCaptured;
+  final VoidCallback onCancel;
 
-  const RoomCaptureOverlay({super.key, required this.onCaptureComplete});
+  /// All previously captured corners — used for relative guidance warnings, NEVER rejections
+  final List<RoomCornerReading> allCapturedCorners;
+
+  const RoomCaptureOverlay({
+    Key? key,
+    required this.cornerIndex,
+    required this.onCaptured,
+    required this.onCancel,
+    this.allCapturedCorners = const [],
+  }) : super(key: key);
 
   @override
   State<RoomCaptureOverlay> createState() => _RoomCaptureOverlayState();
 }
 
-class _RoomCaptureOverlayState extends State<RoomCaptureOverlay>
-    with SingleTickerProviderStateMixin {
-  // ── Camera ────────────────────────────────────────────────────────────────
-  CameraController? _camera;
-  bool _cameraInitialized = false;
+class _RoomCaptureOverlayState extends State<RoomCaptureOverlay> {
+  final SensorFusionService _sensorFusionService = SensorFusionService();
+  StreamSubscription<FusedSensorReading>? _fusionSub;
+  Timer? _ticker;
 
-  // ── Sensor streams ────────────────────────────────────────────────────────
-  StreamSubscription<Position>?      _gpsSub;
-  StreamSubscription<CompassEvent>?  _compassSub;
-  StreamSubscription<AccelerometerEvent>? _accelSub;
-  StreamSubscription<GyroscopeEvent>?     _gyroSub;
-  StreamSubscription<MagnetometerEvent>?  _magSub;
+  // Live state
+  FusedSensorReading? _currentFusedReading;
+  int _elapsedSeconds = 0;
+  bool _isListening = false;
 
-  // ── Live sensor values ────────────────────────────────────────────────────
-  Position? _pos;
-  double    _heading    = 0.0;
-  double    _accelX     = 0.0, _accelY = 0.0, _accelZ = 9.81;
-  double    _gyroX      = 0.0, _gyroY  = 0.0, _gyroZ  = 0.0;
-  double    _magX       = 0.0, _magY   = 0.0, _magZ   = 0.0;
-  double?   _baroPressure;
-
-  // ── Capture state ─────────────────────────────────────────────────────────
-  final List<CornerData> _captured   = [];
-  int                    _step       = 0;   // 0..3
-  bool                   _capturing  = false;
-  String?                _captureErr;
-  String?                _initError;
-
-  // ── UI ────────────────────────────────────────────────────────────────────
-  late AnimationController _pulseCtrl;
-  late Animation<double>   _pulse;
-
-  static const _labels = ['Corner A', 'Corner B', 'Corner C', 'Corner D'];
-  static const _hints  = [
-    'Stand at the FRONT-LEFT corner of the classroom.',
-    'Walk to the FRONT-RIGHT corner.',
-    'Walk to the BACK-RIGHT corner.',
-    'Walk to the BACK-LEFT corner.',
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _initCamera();
-    _startSensors();
-
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
-    _pulse = Tween<double>(begin: 0.8, end: 1.1).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
-    );
-  }
-
-  // ── Init ───────────────────────────────────────────────────────────────────
-
-  Future<void> _initCamera() async {
-    try {
-      final cams = await availableCameras();
-      if (cams.isEmpty) {
-        if (mounted) setState(() => _initError = 'No cameras found');
-        return;
-      }
-      _camera = CameraController(cams[0], ResolutionPreset.medium, enableAudio: false);
-      await _camera!.initialize();
-      if (mounted) setState(() => _cameraInitialized = true);
-    } catch (e) {
-      if (mounted) setState(() => _initError = 'Camera init failed: $e');
-    }
-  }
-
-  void _startSensors() {
-    // GPS — highest accuracy, no distance filter (want every update)
-    _gpsSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-      ),
-    ).listen(
-      (p) {
-        if (mounted) setState(() => _pos = p);
-      },
-      onError: (e) {
-        debugPrint('GPS stream error: $e');
-      },
-    );
-
-    // Compass
-    _compassSub = FlutterCompass.events?.listen((e) {
-      if (mounted) setState(() => _heading = e.heading ?? _heading);
-    });
-
-    // Accelerometer (m/s²)
-    _accelSub = accelerometerEventStream().listen((e) {
-      if (mounted) setState(() { _accelX = e.x; _accelY = e.y; _accelZ = e.z; });
-    });
-
-    // Gyroscope (rad/s)
-    _gyroSub = gyroscopeEventStream().listen((e) {
-      if (mounted) setState(() { _gyroX = e.x; _gyroY = e.y; _gyroZ = e.z; });
-    });
-
-    // Magnetometer (µT)
-    _magSub = magnetometerEventStream().listen((e) {
-      if (mounted) setState(() { _magX = e.x; _magY = e.y; _magZ = e.z; });
-    });
-
-    // Barometer (hPa) — sensors_plus ≥ 3.x exposes barometerEventStream
-    try {
-      barometerEventStream().listen((e) {
-        if (mounted) setState(() => _baroPressure = e.pressure);
-      });
-    } catch (_) {}
-  }
-
-  // ── Accuracy helpers ───────────────────────────────────────────────────────
-
-  bool get _gpsReady => _pos != null && _pos!.accuracy <= 15;
-
-  Color _accuracyColor(double acc) {
-    if (acc <= 5)  return AppColors.success;
-    if (acc <= 10) return Colors.lightGreen;
-    if (acc <= 15) return Colors.orange;
-    return AppColors.danger;
-  }
-
-  // ── Capture one corner ────────────────────────────────────────────────────
-
-  Future<void> _captureCorner() async {
-    if (_pos == null || _capturing) return;
-    setState(() { _capturing = true; _captureErr = null; });
-
-    // Compute device pitch from accelerometer (angle from horizontal)
-    final pitch = math.atan2(-_accelX,
-            math.sqrt(_accelY * _accelY + _accelZ * _accelZ)) *
-        (180 / math.pi);
-    final roll = math.atan2(_accelY, _accelZ) * (180 / math.pi);
-
-    final corner = CornerData(
-      lat:              _pos!.latitude,
-      lng:              _pos!.longitude,
-      alt:              _pos!.altitude,
-      accuracy:         _pos!.accuracy,
-      altitudeAccuracy: _pos!.altitudeAccuracy ?? 5.0,
-      heading:          _heading,
-      pitch:            pitch,
-      roll:             roll,
-      yaw:              _heading,        // yaw ≈ compass heading in NED frame
-      accelerometer:    {'x': _accelX, 'y': _accelY, 'z': _accelZ},
-      gyroscope:        {'x': _gyroX,  'y': _gyroY,  'z': _gyroZ},
-      magneticField:    {'x': _magX,   'y': _magY,   'z': _magZ},
-      barometricPressure: _baroPressure,
-    );
-
-    setState(() {
-      _captured.add(corner);
-      _capturing = false;
-    });
-
-    if (_captured.length == 4) {
-      // All done — return to caller
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (mounted) {
-        widget.onCaptureComplete(_captured);
-        Navigator.pop(context);
-      }
-    } else {
-      setState(() => _step = _captured.length);
-    }
-  }
-
-  // ── Undo last corner ─────────────────────────────────────────────────────
-
-  void _undoLastCorner() {
-    if (_captured.isEmpty) return;
-    setState(() {
-      _captured.removeLast();
-      _step = _captured.length;
-    });
-  }
-
-  // ── Dispose ────────────────────────────────────────────────────────────────
+  // UI state
+  String _statusText = 'Tap "Start High-Precision Calibration" to start';
+  String _warningText = '';
+  bool _hasWarning = false;
+  bool _isCompleted = false;
 
   @override
   void dispose() {
-    _camera?.dispose();
-    _gpsSub?.cancel();
-    _compassSub?.cancel();
-    _accelSub?.cancel();
-    _gyroSub?.cancel();
-    _magSub?.cancel();
-    _pulseCtrl.dispose();
+    _fusionSub?.cancel();
+    _ticker?.cancel();
+    _sensorFusionService.stopTracking();
     super.dispose();
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
+  // ── Start Sensor Fusion Tracking ──────────────────────────────────────────
+  Future<void> _startCalibration() async {
+    await _fusionSub?.cancel();
+    _ticker?.cancel();
 
+    setState(() {
+      _isListening = true;
+      _currentFusedReading = null;
+      _elapsedSeconds = 0;
+      _hasWarning = false;
+      _warningText = '';
+      _isCompleted = false;
+      _statusText = 'Fusing sensors & calibrating...';
+    });
+
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _elapsedSeconds++);
+    });
+
+    try {
+      await _sensorFusionService.startTracking();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isListening = false;
+          _hasWarning = true;
+          _warningText = e.toString().replaceFirst('Exception: ', '');
+          _statusText = 'Location Permission Required';
+        });
+
+        // If permanently denied, offer to open app settings
+        if (e.toString().contains('permanently denied')) {
+          Geolocator.openAppSettings();
+        }
+      }
+      return;
+    }
+
+    _fusionSub = _sensorFusionService.fusedStream.listen(
+      (FusedSensorReading reading) {
+        if (!mounted || _isCompleted) return;
+
+        setState(() {
+          _currentFusedReading = reading;
+          
+          // Compute status message
+          final acc = reading.gpsAccuracy;
+          if (acc <= 3) {
+            _statusText = '99.9% High Precision Calibrated';
+          } else if (acc <= 10) {
+            _statusText = 'Optimal Fusion Quality Achieved';
+          } else {
+            _statusText = 'Stabilizing (Accuracy ±${acc.toStringAsFixed(1)}m)';
+          }
+
+          // Warnings are strictly advisory, NEVER blocking
+          if (!reading.isStationary) {
+            _hasWarning = true;
+            _warningText = '⚠️ Keep device steady! Motion jitter detected.';
+          } else if (acc > 20.0) {
+            _hasWarning = true;
+            _warningText = '⚠️ Weak GPS signal detected. Move to clear window if possible.';
+          } else {
+            _hasWarning = false;
+            _warningText = '';
+          }
+        });
+      },
+      onError: (err) {
+        if (mounted) {
+          setState(() {
+            _isListening = false;
+            _statusText = 'Fusion error: $err';
+          });
+        }
+      },
+    );
+  }
+
+  // ── User accepts current calibrated fix ───────────────────────────────────
+  void _acceptCurrentFix() {
+    final r = _currentFusedReading;
+    if (r == null) return;
+
+    // Check distance only to show soft guide warnings, NEVER to block creation!
+    for (int i = 0; i < widget.allCapturedCorners.length; i++) {
+      final prev = widget.allCapturedCorners[i];
+      final dist = Geolocator.distanceBetween(
+        prev.latitude, prev.longitude,
+        r.latitude, r.longitude,
+      );
+      if (dist < 0.5) {
+        debugPrint('Advisory: Corner is extremely close to Corner ${i + 1} ($dist m). Proceeding anyway.');
+      }
+    }
+
+    _commit(r);
+  }
+
+  // ── Final Commit ──────────────────────────────────────────────────────────
+  void _commit(FusedSensorReading reading) {
+    _fusionSub?.cancel();
+    _ticker?.cancel();
+    _sensorFusionService.stopTracking();
+
+    setState(() {
+      _isCompleted = true;
+      _isListening = false;
+      _statusText = '✅ Corner ${widget.cornerIndex} Calibrated & Saved!';
+      _hasWarning = false;
+    });
+
+    final corner = RoomCornerReading(
+      latitude: reading.latitude,
+      longitude: reading.longitude,
+      altitude: reading.altitude,
+      heading: reading.compassDegrees,
+      accuracy: reading.gpsAccuracy,
+      gyroX: reading.gyroscope.x,
+      gyroY: reading.gyroscope.y,
+      gyroZ: reading.gyroscope.z,
+      accelX: reading.accelerometer.x,
+      accelY: reading.accelerometer.y,
+      accelZ: reading.accelerometer.z,
+      directionLabel: reading.directionLabel,
+    );
+
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) widget.onCaptured(corner);
+    });
+  }
+
+  Color _getAccuracyColor(double acc) {
+    if (acc <= 5) return Colors.tealAccent.shade700;
+    if (acc <= 15) return Colors.greenAccent.shade400;
+    if (acc <= 30) return Colors.amberAccent.shade400;
+    return Colors.redAccent;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    if (_initError != null) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
+    final theme = Theme.of(context);
+    final reading = _currentFusedReading;
+    final acc = reading?.gpsAccuracy ?? 99.9;
+
+    return Container(
+      color: Colors.black.withOpacity(0.75),
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.94,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A), // Premium Dark Slate Background
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: theme.primaryColor.withOpacity(0.2), width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.6),
+                  blurRadius: 30,
+                  offset: const Offset(0, 15),
+                ),
+              ],
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.camera_alt_outlined, color: Colors.white54, size: 64),
-                const SizedBox(height: 16),
-                Text(_initError!, style: const TextStyle(color: Colors.white70),
-                    textAlign: TextAlign.center),
-                const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Go Back'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (!_cameraInitialized || _camera == null) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator(color: Colors.white)),
-      );
-    }
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          // ── Camera preview ───────────────────────────────────────
-          CameraPreview(_camera!),
-
-          // ── Dark scrim at top + bottom ───────────────────────────
-          Column(
-            children: [
-              _buildTopHud(),
-              const Spacer(),
-              _buildBottomPanel(),
-            ],
-          ),
-
-          // ── Corner reticle ───────────────────────────────────────
-          Center(child: _buildReticle()),
-        ],
-      ),
-    );
-  }
-
-  // ── Top HUD ────────────────────────────────────────────────────────────────
-
-  Widget _buildTopHud() {
-    final acc = _pos?.accuracy ?? 99;
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.black87, Colors.transparent],
-        ),
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-          child: Column(
-            children: [
-              // Progress bar
-              Row(
-                children: List.generate(4, (i) {
-                  final done    = i < _captured.length;
-                  final current = i == _step && _captured.length < 4;
-                  return Expanded(
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 3),
-                      height: 4,
+                // ── Top Header Badge ────────────────────────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(2),
-                        color: done
-                            ? AppColors.success
-                            : current
-                                ? AppColors.primaryLight
-                                : Colors.white24,
+                        color: theme.primaryColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                    ),
-                  );
-                }),
-              ),
-
-              const SizedBox(height: 14),
-
-              // Sensor readouts
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _HudChip(
-                        icon: Icons.gps_fixed,
-                        label: 'GPS',
-                        value: _pos == null
-                            ? 'Searching…'
-                            : '±${acc.toStringAsFixed(1)}m',
-                        color: _pos == null ? Colors.orange : _accuracyColor(acc),
-                      ),
-                      const SizedBox(height: 6),
-                      _HudChip(
-                        icon: Icons.height,
-                        label: 'Alt',
-                        value: _pos == null
-                            ? '---'
-                            : '${_pos!.altitude.toStringAsFixed(1)}m',
-                      ),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      _HudChip(
-                        icon: Icons.explore,
-                        label: 'Heading',
-                        value: '${_heading.toStringAsFixed(0)}°',
-                      ),
-                      const SizedBox(height: 6),
-                      _HudChip(
-                        icon: Icons.compress,
-                        label: 'Baro',
-                        value: _baroPressure == null
-                            ? 'N/A'
-                            : '${_baroPressure!.toStringAsFixed(1)} hPa',
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 8),
-
-              // GPS accuracy warning
-              if (!_gpsReady)
-                Container(
-                  margin: const EdgeInsets.only(top: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.orange.withOpacity(0.4)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.warning_amber_rounded,
-                          color: Colors.orange, size: 14),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          _pos == null
-                              ? 'Acquiring GPS signal…'
-                              : 'Move to open sky for better accuracy (${_pos!.accuracy.toStringAsFixed(1)}m)',
-                          style: const TextStyle(
-                              color: Colors.orange, fontSize: 12),
+                      child: Text(
+                        'CORNER ${widget.cornerIndex} / 4',
+                        style: TextStyle(
+                          color: theme.primaryColor,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          letterSpacing: 1.0,
                         ),
                       ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white70),
+                      onPressed: widget.onCancel,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+
+                // ── High Tech Compass & Stabilization Dial ─────────────────
+                Container(
+                  height: 140,
+                  width: 140,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1E293B),
+                    border: Border.all(
+                      color: reading != null
+                          ? _getAccuracyColor(acc)
+                          : theme.primaryColor.withOpacity(0.3),
+                      width: 3,
+                    ),
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Grid background decoration inside dial
+                      Opacity(
+                        opacity: 0.15,
+                        child: Icon(Icons.grid_3x3_rounded, size: 90, color: theme.primaryColor),
+                      ),
+                      // Rotating compass needle
+                      Transform.rotate(
+                        angle: -((reading?.compassDegrees ?? 0.0) * math.pi / 180.0),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Container(
+                              height: 110,
+                              width: 110,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            // North marker arrow
+                            Positioned(
+                              top: 2,
+                              child: Column(
+                                children: [
+                                  const Icon(Icons.arrow_drop_up_rounded, size: 24, color: Colors.redAccent),
+                                  Text(
+                                    'N',
+                                    style: TextStyle(
+                                      color: Colors.redAccent.shade200,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Core telemetries overlay
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            '${(reading?.compassDegrees ?? 0.0).toStringAsFixed(0)}°',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          Text(
+                            reading?.directionLabel ?? 'CAL',
+                            style: TextStyle(
+                              color: theme.primaryColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      )
                     ],
                   ),
                 ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Reticle ────────────────────────────────────────────────────────────────
-
-  Widget _buildReticle() {
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (_, __) => Transform.scale(
-        scale: _gpsReady ? _pulse.value : 1.0,
-        child: Container(
-          width: 90,
-          height: 90,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: _gpsReady
-                  ? AppColors.success.withOpacity(0.85)
-                  : Colors.white38,
-              width: 2,
-            ),
-          ),
-          child: Center(
-            child: Icon(
-              Icons.add,
-              color: _gpsReady ? AppColors.success : Colors.white38,
-              size: 44,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Bottom panel ───────────────────────────────────────────────────────────
-
-  Widget _buildBottomPanel() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [Colors.black, Colors.black87, Colors.transparent],
-        ),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Captured corners chips
-              if (_captured.isNotEmpty) ...[
-                Wrap(
-                  spacing: 8,
-                  children: List.generate(_captured.length, (i) {
-                    final c = _captured[i];
-                    return _CornerChip(
-                      label: _labels[i],
-                      accuracy: c.accuracy,
-                    );
-                  }),
-                ),
                 const SizedBox(height: 16),
-              ],
 
-              // Step label
-              if (_step < 4)
+                // ── Centered Title & Instructions ──────────────────────────
                 Text(
-                  'STEP ${_step + 1} / 4 — ${_labels[_step]}',
+                  _statusText,
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
                   ),
                 ),
-              const SizedBox(height: 6),
-              if (_step < 4)
-                Text(
-                  _hints[_step],
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
+                const SizedBox(height: 12),
 
-              const SizedBox(height: 20),
-
-              // Error
-              if (_captureErr != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    _captureErr!,
-                    style: const TextStyle(color: AppColors.danger, fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-
-              // Action buttons
-              Row(
-                children: [
-                  // Cancel button
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: BorderSide(color: Colors.grey.shade700),
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text('Cancel'),
+                // ── Motion Stabilization Telemetry HUD ──────────────────────
+                if (reading != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
                     ),
-                  ),
-                  // Undo button (show if we have captured corners)
-                  if (_captured.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 52,
-                      height: 52,
-                      child: IconButton(
-                        onPressed: _undoLastCorner,
-                        icon: const Icon(Icons.undo_rounded, color: Colors.orange),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.orange.withOpacity(0.1),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: Colors.orange.withOpacity(0.3)),
+                    child: Column(
+                      children: [
+                        // GPS Coords
+                        _buildHudRow('LATITUDE', reading.latitude.toStringAsFixed(8)),
+                        _buildHudRow('LONGITUDE', reading.longitude.toStringAsFixed(8)),
+                        _buildHudRow('ALTITUDE', '${reading.altitude.toStringAsFixed(1)} m'),
+                        _buildHudRow('GPS PRECISION', '±${reading.gpsAccuracy.toStringAsFixed(2)} m'),
+                        const Divider(color: Colors.white12, height: 16),
+                        // Accelerometer & Gyro
+                        _buildHudRow(
+                          'GYROSCOPE JITTER', 
+                          'X: ${reading.gyroscope.x.toStringAsFixed(2)} | Y: ${reading.gyroscope.y.toStringAsFixed(2)}',
+                        ),
+                        _buildHudRow(
+                          'STABILIZATION SCORE', 
+                          '${((1.0 - reading.motionVariance.clamp(0.0, 1.0)) * 100.0).toStringAsFixed(0)}%',
+                        ),
+                        const SizedBox(height: 8),
+                        // Motion state bar
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: reading.motionVariance.clamp(0.0, 1.0),
+                            backgroundColor: Colors.white12,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              reading.isStationary ? Colors.tealAccent.shade400 : Colors.orangeAccent,
+                            ),
+                            minHeight: 5,
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
-                  // Capture button
-                  if (_gpsReady && _step < 4) ...[
-                    const SizedBox(width: 8),
-                    Expanded(
-                      flex: 2,
-                      child: ElevatedButton(
-                        onPressed: _capturing ? null : _captureCorner,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryLight,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: _capturing
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white))
-                            : Text(
-                                _step == 3 ? 'FINISH CAPTURE' : 'CAPTURE CORNER',
-                                style: const TextStyle(
-                                    fontSize: 15, fontWeight: FontWeight.bold),
-                              ),
-                      ),
-                    ),
-                  ],
+                  ),
+                  const SizedBox(height: 12),
                 ],
-              ),
-            ],
+
+                // ── Warning banner (if any) ─────────────────────────────────
+                if (_hasWarning && _warningText.isNotEmpty) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orangeAccent.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      _warningText,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.orangeAccent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
+                // ── Calibration & Capture Controls ─────────────────────────
+                if (!_isListening && !_isCompleted) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _startCalibration,
+                      icon: const Icon(Icons.spatial_audio_off_rounded),
+                      label: const Text(
+                        'Start High-Precision Calibration',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: theme.primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                    ),
+                  ),
+                ],
+
+                if (_isListening && !_isCompleted) ...[
+                  // ACCEPT button — always works, warnings are soft
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: reading != null ? _acceptCurrentFix : null,
+                      icon: const Icon(Icons.check_circle_rounded),
+                      label: Text(
+                        reading != null 
+                            ? 'Capture & Freeze Corner $acc m' 
+                            : 'Fusing Telemetries...',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: reading != null 
+                            ? _getAccuracyColor(acc) 
+                            : Colors.grey.shade800,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // RESTART calibration
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _startCalibration,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Recalibrate Sensors'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        side: const BorderSide(color: Colors.white30),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
-}
 
-// ── Sub-widgets ────────────────────────────────────────────────────────────────
-
-class _HudChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color? color;
-
-  const _HudChip({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color ?? Colors.white70, size: 14),
-        const SizedBox(width: 4),
-        Text(
-          '$label: ',
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
-        ),
-        Text(
-          value,
-          style: TextStyle(
-            color: color ?? Colors.white,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _CornerChip extends StatelessWidget {
-  final String label;
-  final double accuracy;
-
-  const _CornerChip({required this.label, required this.accuracy});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.success.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.success.withOpacity(0.5)),
-      ),
+  Widget _buildHudRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const Icon(Icons.check_circle_rounded,
-              color: AppColors.success, size: 13),
-          const SizedBox(width: 5),
-          Text(
-            '$label (±${accuracy.toStringAsFixed(1)}m)',
-            style: const TextStyle(
-                color: AppColors.success,
-                fontSize: 11,
-                fontWeight: FontWeight.w600),
-          ),
+          Text(label, style: const TextStyle(fontSize: 10, color: Colors.white54, fontWeight: FontWeight.bold)),
+          Text(value, style: const TextStyle(fontSize: 11, color: Colors.white, fontFamily: 'monospace', fontWeight: FontWeight.w600)),
         ],
       ),
     );

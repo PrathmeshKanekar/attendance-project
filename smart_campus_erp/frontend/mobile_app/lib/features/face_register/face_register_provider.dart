@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/network/api_client.dart';
 
@@ -40,6 +41,7 @@ class FaceRegisterNotifier extends StateNotifier<FaceRegisterState> {
   }) async {
     state = FaceRegisterLoading();
     try {
+      debugPrint("Uploading face registration payload");
       final res = await _api.post('/api/face/register/', data: {
         'student_id'    : studentId,
         'face_image_b64': faceImageB64,

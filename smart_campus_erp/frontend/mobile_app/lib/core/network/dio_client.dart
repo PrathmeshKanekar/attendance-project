@@ -74,9 +74,38 @@ class _ApiAuthInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
-    final token = await SecureStorageService.getAccessToken();
-    if (token != null && token.isNotEmpty) {
-      options.headers['Authorization'] = 'Bearer $token';
+    try {
+      final token = await SecureStorageService.getAccessToken()
+          .timeout(const Duration(seconds: 5));
+      if (token != null && token.isNotEmpty) {
+        options.headers['Authorization'] = 'Bearer $token';
+      } else {
+        // Token is null — attempt one token refresh before failing
+        final refresh = await SecureStorageService.getRefreshToken()
+            .timeout(const Duration(seconds: 5));
+        if (refresh != null) {
+          try {
+            final baseUrl = await ApiConfig.baseUrl;
+            final refreshDio = Dio(BaseOptions(baseUrl: baseUrl));
+            final res = await refreshDio.post(
+              ApiConfig.refreshToken, 
+              data: {'refresh': refresh},
+            ).timeout(const Duration(seconds: 10));
+            final newToken = res.data['access'];
+            if (newToken != null) {
+              await SecureStorageService.saveTokens(
+                access: newToken,
+                refresh: res.data['refresh'] ?? refresh,
+              );
+              options.headers['Authorization'] = 'Bearer $newToken';
+            }
+          } catch (e) {
+            print('Pre-request token refresh failed: $e');
+          }
+        }
+      }
+    } catch (e) {
+      print('Token read error in interceptor: $e');
     }
     handler.next(options);
   }

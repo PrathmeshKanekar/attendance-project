@@ -37,9 +37,12 @@ class OfflineAttendanceService {
     for (final key in pendingKeys) {
       final entry = Map<String, dynamic>.from(box.get(key));
       try {
-        await api.post('/api/attendance/mark/', data: entry);
-        entry['synced'] = true;
-        await box.put(key, entry);
+        final res = await api.post('/api/attendance/mark/', data: entry);
+        final rawData = res.data;
+        if (rawData is Map && rawData['success'] == true && rawData.containsKey('attendance_id')) {
+          entry['synced'] = true;
+          await box.put(key, entry);
+        }
       } catch (_) {
         // Leave for next attempt
       }

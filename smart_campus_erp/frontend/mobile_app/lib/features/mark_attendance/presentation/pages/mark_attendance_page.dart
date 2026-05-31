@@ -5,13 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:smart_campus_app/core/constants/app_colors.dart';
 import 'package:smart_campus_app/core/network/api_client.dart';
 import 'package:smart_campus_app/core/services/location_service.dart';
-import 'package:smart_campus_app/features/mark_attendance/domain/repositories/i_attendance_repository.dart';
 import 'package:smart_campus_app/features/mark_attendance/data/repositories/attendance_repository_impl.dart';
 import 'package:smart_campus_app/features/mark_attendance/presentation/cubit/attendance_cubit.dart';
 import 'package:smart_campus_app/features/mark_attendance/presentation/cubit/attendance_state.dart';
 import 'package:smart_campus_app/features/mark_attendance/presentation/widgets/attendance_stepper.dart';
 import 'package:smart_campus_app/features/mark_attendance/presentation/widgets/verification_step_widget.dart';
 import 'package:smart_campus_app/features/mark_attendance/presentation/widgets/camera_verification_widget.dart';
+import 'package:smart_campus_app/features/student/providers/student_providers.dart';
+import 'package:smart_campus_app/features/reports/report_providers.dart';
 
 class MarkAttendancePage extends ConsumerWidget {
   final Map<String, dynamic> session;
@@ -30,11 +31,11 @@ class MarkAttendancePage extends ConsumerWidget {
   }
 }
 
-class _MarkAttendanceView extends StatelessWidget {
+class _MarkAttendanceView extends ConsumerWidget {
   const _MarkAttendanceView();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       body: Stack(
@@ -50,7 +51,7 @@ class _MarkAttendanceView extends StatelessWidget {
                   child: BlocBuilder<AttendanceCubit, AttendanceState>(
                     builder: (context, state) {
                       if (state.currentStep == AttendanceStep.success) {
-                        return _buildSuccessView(context);
+                        return _buildSuccessView(context, ref);
                       }
                       
                       return _buildMainContent(context, state);
@@ -212,6 +213,8 @@ class _MarkAttendanceView extends StatelessWidget {
   Widget _buildErrorCard(BuildContext context, AttendanceState state) {
     final msg = state.errorMessage!;
     final type = state.locationErrorType;
+    final isDeviceError = msg.toLowerCase().contains('device') && 
+        (msg.toLowerCase().contains('not registered') || msg.toLowerCase().contains('register your device'));
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -256,12 +259,65 @@ class _MarkAttendanceView extends StatelessWidget {
               ],
             ),
           ],
+          if (isDeviceError) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: () async {
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (context) => const Center(child: CircularProgressIndicator()),
+                    );
+
+                    final cubit = context.read<AttendanceCubit>();
+                    final res = await cubit.reRegisterDevice();
+                    
+                    if (context.mounted) {
+                      Navigator.pop(context); // Dismiss loading spinner
+                      res.fold(
+                        (err) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Registration failed: $err'),
+                              backgroundColor: AppColors.danger,
+                            ),
+                          );
+                        },
+                        (_) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Device registered successfully! Initializing verification...'),
+                              backgroundColor: AppColors.success,
+                            ),
+                          );
+                          // Reset flow to retry with new device
+                          cubit.initSession(cubit.state.sessionData);
+                        },
+                      );
+                    }
+                  },
+                  icon: const Icon(
+                    Icons.app_registration_rounded,
+                    size: 16,
+                    color: AppColors.primaryLight,
+                  ),
+                  label: const Text(
+                    'REGISTER DEVICE',
+                    style: TextStyle(color: AppColors.primaryLight, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildSuccessView(BuildContext context) {
+  Widget _buildSuccessView(BuildContext context, WidgetRef ref) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -273,7 +329,14 @@ class _MarkAttendanceView extends StatelessWidget {
           const Text('Identity & Geo-Presence Verified', style: TextStyle(color: Colors.white60)),
           const SizedBox(height: 40),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              ref.invalidate(studentActiveSessionsProvider);
+              ref.invalidate(studentMyAttendanceProvider);
+              ref.invalidate(studentAttendanceSummaryProvider);
+              ref.invalidate(reportDashboardSummaryProvider);
+              ref.invalidate(attendanceTrendsProvider);
+              Navigator.pop(context);
+            },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryLight,
               minimumSize: const Size(200, 50),

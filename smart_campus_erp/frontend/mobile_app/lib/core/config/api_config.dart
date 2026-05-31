@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiConfig {
@@ -10,46 +13,71 @@ class ApiConfig {
   static const String _baseUrlKey = 'custom_base_url';
 
   // ── CENTRALIZED PC LAN IP (Single Source of Truth) ──────────────
-  static const String devIp   = '10.226.203.98';
-  static const String devPort = '8000';
-  static const String defaultBaseUrl = 'http://$devIp:$devPort';
+  static const String pcWifiIp = '10.226.203.98';
+  static const String devIp    = pcWifiIp; // Compatibility alias
+  static const String devPort  = '8000';
+
+  /// Dynamically resolve default base URL based on platform/device type
+  static Future<String> get defaultBaseUrl async {
+    if (kIsWeb) {
+      return 'http://localhost:$devPort';
+    }
+    if (Platform.isAndroid) {
+      try {
+        final deviceInfo = DeviceInfoPlugin();
+        final androidInfo = await deviceInfo.androidInfo;
+        if (!androidInfo.isPhysicalDevice) {
+          // Android Emulator
+          return 'http://10.0.2.2:$devPort';
+        }
+      } catch (e) {
+        debugPrint('ApiConfig: Error reading androidInfo: $e');
+      }
+      // Physical Android Device (connects directly to PC Wi-Fi IP)
+      return 'http://$pcWifiIp:$devPort';
+    }
+    // Default fallback (Localhost) for iOS / desktop platforms
+    return 'http://127.0.0.1:$devPort';
+  }
 
   /// Get the validated base URL
   static Future<String> get baseUrl async {
+    final fallback = await defaultBaseUrl;
     try {
-      print('ApiConfig: Resolving base URL...');
+      debugPrint('ApiConfig: Resolving base URL...');
       final custom = await _storage.read(key: _baseUrlKey).timeout(
         const Duration(seconds: 2),
         onTimeout: () {
-          print('ApiConfig: Storage read timed out. Using default.');
+          debugPrint('ApiConfig: Storage read timed out. Using default.');
           return null;
         },
       );
-      final resolved = _sanitize(custom);
-      print('ApiConfig: Resolved to $resolved');
+      final resolved = await _sanitize(custom);
+      debugPrint('ApiConfig: Resolved to $resolved');
       return resolved;
     } catch (e) {
-      print('ApiConfig: Error reading base URL: $e. Using default.');
-      return defaultBaseUrl;
+      debugPrint('ApiConfig: Error reading base URL: $e. Using default.');
+      return fallback;
     }
   }
 
   /// Sanitize and validate URL to prevent loopback failures on mobile
-  static String _sanitize(String? url) {
-    if (url == null || url.trim().isEmpty) return defaultBaseUrl;
+  static Future<String> _sanitize(String? url) async {
+    final fallback = await defaultBaseUrl;
+    if (url == null || url.trim().isEmpty) return fallback;
     
     final lower = url.toLowerCase().trim();
     if (lower.contains('localhost') || 
         lower.contains('127.0.0.1') || 
         lower.contains('0.0.0.0')) {
-      return defaultBaseUrl;
+      return fallback;
     }
     return url.trim();
   }
 
   /// Save a custom base URL (with validation)
   static Future<void> setCustomBaseUrl(String url) async {
-    final sanitized = _sanitize(url);
+    final sanitized = await _sanitize(url);
     await _storage.write(key: _baseUrlKey, value: sanitized);
   }
 
@@ -68,6 +96,8 @@ class ApiConfig {
   static const String divisions      = '/api/academic/divisions/';
   static const String departments    = '/api/academic/departments/';
   static const String subjects       = '/api/academic/subjects/';
+  static const String courses        = '/api/academic/courses/';
+  static const String academicYears  = '/api/academic/academic-years/';
   
   // Student
   static const String studentsRegister = '/api/students/register/';

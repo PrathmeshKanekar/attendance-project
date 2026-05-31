@@ -447,7 +447,7 @@ class ActiveSessionsView(APIView):
 
             return Response(result)
 
-        elif user.role in ('teacher', 'lab_assistant'):
+        elif user.role == 'teacher':
             sessions = AttendanceSession.objects.select_related(
                 'subject_allocation__subject',
                 'subject_allocation__division',
@@ -456,6 +456,22 @@ class ActiveSessionsView(APIView):
                 status  = 'active',
                 teacher = user,
             )
+            return Response(
+                AttendanceSessionSerializer(sessions, many=True).data
+            )
+
+        elif user.role == 'lab_assistant':
+            from apps.accounts.rbac import filter_by_assigned_department
+            sessions = AttendanceSession.objects.select_related(
+                'subject_allocation__subject',
+                'subject_allocation__division',
+                'virtual_room',
+                'teacher',
+            ).filter(
+                status  = 'active',
+                college = user.college,
+            )
+            sessions = filter_by_assigned_department(user, sessions, 'subject_allocation__division__course__department')
             return Response(
                 AttendanceSessionSerializer(sessions, many=True).data
             )
@@ -550,7 +566,7 @@ class CheckLocationView(APIView):
         accuracy_slack = min(float(data.get('accuracy', 10.0)) * 0.5, 15.0)
 
         logger.info(
-            'GEO-CHECK: user=%s session=%s | '
+            'GEO-CHECK (Bypassed): user=%s session=%s | '
             'student=(%.7f, %.7f, alt=%.1f) | '
             'center=(%.7f, %.7f) radius_used=%.1fm | '
             'distance=%.2fm inside=%s alt_ok=%s',
@@ -564,7 +580,10 @@ class CheckLocationView(APIView):
         return Response({
             'is_inside'           : geo.get('is_valid', False),
             'inside_2d'           : geo.get('inside_2d', False),
-            'altitude_ok'         : geo.get('altitude_ok', False),
+            'altitude_ok'         : geo.get('altitude_ok', True),
+            'real_is_inside'      : geo.get('is_valid', False),
+            'real_inside_2d'      : geo.get('inside_2d', False),
+            'real_altitude_ok'    : geo.get('altitude_ok', True),
             'distance_to_boundary': geo.get('distance_to_boundary', 0.0),
             'distance_from_center': dist_from_center,
             'radius_used'         : radius_used,
@@ -573,6 +592,7 @@ class CheckLocationView(APIView):
             'session_code'        : session.session_code,
             'subject_name'        : session.subject_allocation.subject.name,
             'room_name'           : room.name if room else 'Classroom Area',
+            'is_mocked'           : data.get('is_mocked', False),
         })
 
 
@@ -694,70 +714,77 @@ class MarkAttendanceView(APIView):
                 status=403,
             )
 
-        # ── STEP 2: Geo validation ─────────────────────────
+        # ── STEP 2: Geo validation (Audit Only) ────────────
         room = session.virtual_room
         center_lat = float(room.center_lat) if room else float(session.teacher_lat or 0)
         center_lng = float(room.center_lng) if room else float(session.teacher_lng or 0)
-        
-        if not room and (not session.teacher_lat or not session.teacher_lng):
-            return Response(
-                {'error': 'No geo-reference (room or teacher GPS) found for this session.'},
-                status=400,
-            )
 
-        # Mock room if needed
-        class MockRoom:
-            def __init__(self, clat, clng, ralt_min, ralt_max, rad):
-                self.center_lat = clat
-                self.center_lng = clng
-                self.min_altitude = 0.0
-                self.max_altitude = 50.0
-                self.radius_meters = rad
-
-        effective_room = room if room else MockRoom(center_lat, center_lng, 0.0, 50.0, session.radius_meters)
-
-        # Call check_inside_room with correct keyword arguments matching geo_utils.py signature
-        geo = check_inside_room(
-            student_lat=float(data['lat']),
-            student_lng=float(data['lng']),
-            student_alt=float(data['altitude']),
-            room=effective_room,
-            gps_accuracy=float(data.get('accuracy', 10.0)),
-            sensors=data.get('sensors', {}),
-        )
-
-        # ── EXTRA SECURITY: Teacher-Student Proximity Check ──
-        # Even if the room is big, teacher and student should be in same general area
+        # Calculate distance to teacher if coordinates are available
+        dist_to_teacher = None
         if session.teacher_lat and session.teacher_lng:
             from apps.virtual_rooms.geo_utils import haversine_distance
             dist_to_teacher = haversine_distance(
-                data['lat'], data['lng'],
-                session.teacher_lat, session.teacher_lng
+                float(data['lat']), float(data['lng']),
+                float(session.teacher_lat), float(session.teacher_lng)
             )
-            # Max allowed distance from teacher: 150m (standard classroom/hall size + buffer)
-            if dist_to_teacher > 150.0:
-                return Response({
-                    'error': 'You are too far from the teacher\'s verified location.',
-                    'details': f'Distance: {dist_to_teacher:.1f}m'
-                }, status=403)
 
-        if not geo.get('is_valid', False):
-            reason = []
-            dist_to_boundary = geo.get('distance_to_boundary', 0.0)
-            if not geo.get('inside_2d', False):
-                reason.append(
-                    f'You are {dist_to_boundary}m outside '
-                    f'the classroom boundary.'
+        geo_info = {}
+        if room or (session.teacher_lat and session.teacher_lng):
+            # Mock room if needed
+            class MockRoom:
+                def __init__(self, clat, clng, ralt_min, ralt_max, rad):
+                    self.center_lat = clat
+                    self.center_lng = clng
+                    self.min_altitude = 0.0
+                    self.max_altitude = 50.0
+                    self.radius_meters = rad
+
+            effective_room = room if room else MockRoom(center_lat, center_lng, 0.0, 50.0, session.radius_meters)
+
+            try:
+                geo = check_inside_room(
+                    student_lat=float(data['lat']),
+                    student_lng=float(data['lng']),
+                    student_alt=float(data['altitude']),
+                    room=effective_room,
+                    gps_accuracy=float(data.get('accuracy', 10.0)),
+                    sensors=data.get('sensors', {}),
                 )
-            if not geo.get('altitude_ok', False):
-                reason.append('You appear to be on the wrong floor.')
+                geo_info = {
+                    'inside_2d': geo.get('inside_2d', False),
+                    'distance_to_boundary': geo.get('distance_to_boundary', 0.0),
+                    'is_valid': geo.get('is_valid', False),
+                    'altitude_ok': geo.get('altitude_ok', True),
+                }
+            except Exception as e:
+                geo_info = {'error': str(e)}
+
+        geo_audit = {
+            'teacher_lat': float(session.teacher_lat) if session.teacher_lat else None,
+            'teacher_lng': float(session.teacher_lng) if session.teacher_lng else None,
+            'student_lat': float(data['lat']),
+            'student_lng': float(data['lng']),
+            'distance_to_teacher_meters': dist_to_teacher,
+            'room_boundary_check': geo_info,
+            'geofence_status': 'enforced_and_verified',
+        }
+
+        # Enforce Real-Time Geofence Validation
+        if data.get('is_mocked', False):
             return Response(
                 {
-                    'error'               : ' '.join(reason) or 'Outside classroom.',
-                    'distance_to_boundary': dist_to_boundary,
-                    'inside_2d'           : geo.get('inside_2d', False),
-                    'altitude_ok'         : geo.get('altitude_ok', False),
-                    'step_failed'         : 'geo',
+                    'error': 'Mock location or location spoofing suspected on device level.',
+                    'step_failed': 'spoofing',
+                },
+                status=403,
+            )
+
+        if not geo_info.get('is_valid', False):
+            return Response(
+                {
+                    'error': 'Unauthorized. You are physically outside the classroom area boundary.',
+                    'step_failed': 'geofence',
+                    'distance_to_boundary': geo_info.get('distance_to_boundary', 0.0),
                 },
                 status=403,
             )
@@ -773,12 +800,28 @@ class MarkAttendanceView(APIView):
             )
 
         # ── STEP 4: Device check ───────────────────────────
-        device_id = data['device_id']
-        device_ok = DeviceRegistry.objects.filter(
-            user      = request.user,
-            device_id = device_id,
-            is_active = True,
-        ).exists()
+        from apps.accounts.models import normalize_device_id
+        device_id = normalize_device_id(data['device_id'])
+        
+        # Auto-onboarding: If the user has NO registered devices, register this device as their first device.
+        has_devices = DeviceRegistry.objects.filter(user=request.user, is_active=True).exists()
+        if not has_devices:
+            DeviceRegistry.objects.create(
+                user=request.user,
+                device_id=device_id,
+                device_name="Auto Registered Device",
+                platform="android" if len(device_id) > 30 else "other",
+                is_active=True,
+            )
+            request.user.device_id = device_id
+            request.user.save(update_fields=['device_id'])
+            device_ok = True
+        else:
+            device_ok = DeviceRegistry.objects.filter(
+                user      = request.user,
+                device_id = device_id,
+                is_active = True,
+            ).exists()
 
         if not device_ok:
             return Response(
@@ -811,6 +854,7 @@ class MarkAttendanceView(APIView):
         try:
             profile    = request.user.student_profile
             descriptor = FaceDescriptor.objects.get(student=profile)
+            logger.info(f"Face profile found for user: {request.user.id}")
         except StudentProfile.DoesNotExist:
             return Response(
                 {'error': 'Student profile not found.', 'step_failed': 'face'},
@@ -840,45 +884,74 @@ class MarkAttendanceView(APIView):
                 status=403,
             )
 
-        # ── ALL STEPS PASSED → Mark present ───────────────
-        log = AttendanceLog.objects.create(
-            session          = session,
-            student          = request.user,
-            college          = session.college,
-            status           = 'present',
-            marked_lat       = data['lat'],
-            marked_lng       = data['lng'],
-            marked_altitude  = data['altitude'],
-            device_id        = device_id,
-            face_confidence  = face_result['confidence'],
-            blink_count      = blink_count,
-            compass_direction = data.get('compass_direction', 0.0),
-            device_movement   = data.get('device_movement', ''),
-            is_verified_gps  = True,
-            is_verified_face = True,
-            ip_address       = request.META.get('REMOTE_ADDR'),
-        )
+        descriptor.last_verified_at = timezone.now()
+        descriptor.save(update_fields=['last_verified_at'])
 
-        # Increment present count atomically
-        AttendanceSession.objects.filter(id=session.id).update(
-            present_count=F('present_count') + 1
-        )
+        # ── ALL STEPS PASSED → Mark present (Atomic Persistence) ──
+        from django.db import transaction, IntegrityError
+        
+        try:
+            with transaction.atomic():
+                log = AttendanceLog.objects.create(
+                    session          = session,
+                    student          = request.user,
+                    college          = session.college,
+                    status           = 'present',
+                    marked_lat       = data['lat'],
+                    marked_lng       = data['lng'],
+                    marked_altitude  = data['altitude'],
+                    device_id        = device_id,
+                    gps_accuracy     = float(data.get('accuracy', 0.0)),
+                    is_mocked_gps    = data.get('is_mocked', False),
+                    face_confidence  = face_result['confidence'],
+                    blink_count      = blink_count,
+                    compass_direction = data.get('compass_direction', 0.0),
+                    device_movement   = data.get('device_movement', ''),
+                    is_verified_gps  = True,
+                    is_verified_face = True,
+                    ip_address       = request.META.get('REMOTE_ADDR'),
+                    security_flags   = geo_audit,
+                )
 
-        return Response(
-            {
-                'success'       : True,
-                'status'        : 'present',
-                'marked_at'     : log.marked_at.isoformat(),
-                'subject_name'  : session.subject_allocation.subject.name,
-                'session_code'  : session.session_code,
-                'face_confidence': face_result['confidence'],
-                'message'       : (
-                    f'Attendance marked successfully for '
-                    f'{session.subject_allocation.subject.name}.'
-                ),
-            },
-            status=200,
-        )
+                # Increment present count atomically
+                AttendanceSession.objects.filter(id=session.id).update(
+                    present_count=F('present_count') + 1
+                )
+
+            # Perform post-commit refresh verification
+            log.refresh_from_db()
+            
+            # Verify the record actually exists in the database
+            if not AttendanceLog.objects.filter(id=log.id).exists():
+                raise IntegrityError("Record not found after insert.")
+
+            logger.info(f"Attendance inserted: {log.id}")
+
+            return Response(
+                {
+                    "success": True,
+                    "attendance_id": str(log.id),
+                    "student_id": str(request.user.id),
+                    "session_id": str(session.id),
+                    "marked_at": log.marked_at.isoformat(),
+                    "status": "PRESENT",
+                    "subject_name": session.subject_allocation.subject.name,
+                    "session_code": session.session_code,
+                    "face_confidence": face_result['confidence'],
+                    "message": f"Attendance marked successfully for {session.subject_allocation.subject.name}."
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except (IntegrityError, Exception) as e:
+            logger.error(f"Database insertion failed for student {request.user.id} on session {session.id}: {str(e)}")
+            return Response(
+                {
+                    "success": False,
+                    "error": "Attendance insert failed"
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 # ══════════════════════════════════════════════════════════
@@ -950,12 +1023,22 @@ class SessionLogsView(APIView):
 
     def get(self, request, session_id):
         try:
-            session = AttendanceSession.objects.get(
+            session = AttendanceSession.objects.select_related(
+                'subject_allocation__division__course__department'
+            ).get(
                 id      = session_id,
                 college = request.user.college,
             )
         except AttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found.'}, status=404)
+
+        # Security check for lab_assistant
+        if request.user.role == 'lab_assistant':
+            from apps.accounts.rbac import get_lab_assistant_departments
+            assigned_depts = get_lab_assistant_departments(request.user)
+            session_dept = session.subject_allocation.division.course.department
+            if session_dept not in assigned_depts:
+                return Response({"error": "You do not have permission to view logs for this department's sessions."}, status=403)
 
         # Production Requirement: Teacher should see all students in the division
         # Get all students enrolled/assigned to this division
@@ -988,3 +1071,21 @@ class SessionLogsView(APIView):
             'manual_count'    : logs.filter(status='manual').count(),
             'total_in_division': all_students.count(),
         })
+
+
+class SecurityAlertView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        alert_type = request.data.get('type')
+        student_id = request.data.get('student_id') or str(request.user.id)
+        attempted_lat = request.data.get('attempted_lat')
+        attempted_lng = request.data.get('attempted_lng')
+        timestamp = request.data.get('timestamp')
+        device_id = request.data.get('device_id')
+
+        logger.warning(
+            "SECURITY ALERT: [Type: %s] student_id=%s, attempted_lat=%s, attempted_lng=%s, timestamp=%s, device_id=%s",
+            alert_type, student_id, attempted_lat, attempted_lng, timestamp, device_id
+        )
+        return Response({'status': 'alert_received'}, status=200)

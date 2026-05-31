@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import StaffProfile, ApprovalRequest
+from .models import StaffProfile
 
 class StaffProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.ReadOnlyField(source='user.get_full_name')
@@ -26,17 +26,3 @@ class UserSummarySerializer(serializers.Serializer):
             return obj.student_profile.department.name if obj.student_profile.department else "General"
         return "N/A"
 
-class ApprovalRequestSerializer(serializers.ModelSerializer):
-    requested_user_details = UserSummarySerializer(source='requested_user', read_only=True)
-    requested_by_name = serializers.ReadOnlyField(source='requested_by.get_full_name')
-    reviewed_by_name = serializers.ReadOnlyField(source='reviewed_by.get_full_name')
-
-    class Meta:
-        model = ApprovalRequest
-        fields = [
-            'id', 'college', 'requested_user', 'requested_user_details', 
-            'requested_by', 'requested_by_name', 'reviewed_by', 
-            'reviewed_by_name', 'status', 'rejection_reason', 
-            'created_at', 'reviewed_at'
-        ]
-        read_only_fields = ['status', 'reviewed_at', 'reviewed_by']

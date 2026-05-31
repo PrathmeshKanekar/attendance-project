@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import VirtualRoomViewSet
 
 router = DefaultRouter()
-router.register(r'', VirtualRoomViewSet, basename='virtual-room')
+router.register(r'', VirtualRoomViewSet, basename='virtualroom')
 
 urlpatterns = [
     path('', include(router.urls)),

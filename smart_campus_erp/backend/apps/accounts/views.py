@@ -71,7 +71,27 @@ class EmailLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        if not user.is_approved:
+        if user.role == 'student':
+            try:
+                profile = user.student_profile
+                if profile.approval_status == 'PENDING_APPROVAL':
+                    return Response(
+                        {'error': 'Your account is waiting for Lab Assistant approval.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                elif profile.approval_status == 'REJECTED':
+                    return Response(
+                        {'error': 'Your registration was rejected. Contact administration.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                elif profile.approval_status == 'BLOCKED':
+                    return Response(
+                        {'error': 'Your account is blocked.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except AttributeError:
+                pass
+        elif not user.is_approved:
             return Response(
                 {
                     'error': (
@@ -140,14 +160,19 @@ class PRNLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        if not user.is_approved:
+        if profile.approval_status == 'PENDING_APPROVAL':
             return Response(
-                {
-                    'error': (
-                        'Your account is pending approval. '
-                        'Contact your lab assistant or admin.'
-                    )
-                },
+                {'error': 'Your account is waiting for Lab Assistant approval.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        elif profile.approval_status == 'REJECTED':
+            return Response(
+                {'error': 'Your registration was rejected. Contact administration.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        elif profile.approval_status == 'BLOCKED':
+            return Response(
+                {'error': 'Your account is blocked.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -714,4 +739,127 @@ class PendingApprovalsView(APIView):
             'pending_users': data,
             'count'        : len(data),
         })
+
+
+# ══════════════════════════════════════════════════════════
+# Device Verification & Registration Views
+# ══════════════════════════════════════════════════════════
+
+class DeviceRegisterView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .models import normalize_device_id
+        device_id   = request.data.get('device_id', '').strip()
+        device_name = request.data.get('device_name', '').strip()
+        platform    = request.data.get('platform', 'android').strip()
+
+        if not device_id:
+            return Response(
+                {'error': 'device_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        normalized = normalize_device_id(device_id)
+
+        # Deactivate any previous devices for this user
+        DeviceRegistry.objects.filter(user=request.user).update(is_active=False)
+
+        DeviceRegistry.objects.update_or_create(
+            user=request.user,
+            device_id=normalized,
+            defaults={
+                'device_name': device_name,
+                'platform': platform,
+                'is_active': True,
+                'is_verified': True,
+            },
+        )
+
+        request.user.device_id = normalized
+        request.user.save(update_fields=['device_id'])
+
+        return Response({
+            'success': True,
+            'message': 'Device registered successfully.',
+            'device_id': normalized,
+        }, status=status.HTTP_200_OK)
+
+
+class DeviceVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .models import normalize_device_id
+        device_id = request.query_params.get('device_id', '').strip()
+        if not device_id:
+            return Response(
+                {'error': 'device_id query parameter is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        normalized = normalize_device_id(device_id)
+        device = DeviceRegistry.objects.filter(
+            user=request.user,
+            device_id=normalized,
+            is_active=True
+        ).first()
+
+        if device:
+            device.last_used_at = timezone.now()
+            device.save(update_fields=['last_used_at'])
+            return Response({
+                'is_registered': True,
+                'is_verified': device.is_verified,
+                'device_id': normalized,
+            })
+        else:
+            return Response({
+                'is_registered': False,
+                'is_verified': False,
+                'device_id': normalized,
+            })
+
+
+class DeviceRefreshView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .models import normalize_device_id
+        device_id   = request.data.get('device_id', '').strip()
+        device_name = request.data.get('device_name', '').strip()
+        platform    = request.data.get('platform', 'android').strip()
+
+        if not device_id:
+            return Response(
+                {'error': 'device_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        normalized = normalize_device_id(device_id)
+
+        # Deactivate any previous devices for this user
+        DeviceRegistry.objects.filter(user=request.user).update(is_active=False)
+
+        device, created = DeviceRegistry.objects.update_or_create(
+            user=request.user,
+            device_id=normalized,
+            defaults={
+                'device_name': device_name,
+                'platform': platform,
+                'is_active': True,
+                'is_verified': True,
+                'last_used_at': timezone.now(),
+            },
+        )
+
+        request.user.device_id = normalized
+        request.user.save(update_fields=['device_id'])
+
+        return Response({
+            'success': True,
+            'message': 'Device binding refreshed successfully.',
+            'device_id': normalized,
+        })
+
 

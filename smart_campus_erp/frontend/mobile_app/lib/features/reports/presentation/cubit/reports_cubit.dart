@@ -1,9 +1,10 @@
-
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../domain/entities/report_data.dart';
-import '../../domain/repositories/i_report_repository.dart';
+import 'package:smart_campus_app/core/network/api_client.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STATES
+// ─────────────────────────────────────────────────────────────────────────────
 abstract class ReportsState extends Equatable {
   const ReportsState();
   @override
@@ -11,23 +12,52 @@ abstract class ReportsState extends Equatable {
 }
 
 class ReportsInitial extends ReportsState {}
+
 class ReportsLoading extends ReportsState {}
+
 class ReportsLoaded extends ReportsState {
-  final List<ReportSummary> summaries;
-  final List<ChartDataPoint> trends;
+  final List<Map<String, dynamic>> summaryCards;
+  final List<Map<String, dynamic>> trends;
   final List<Map<String, dynamic>> detailedData;
-  final ReportType activeType;
+  final Map<String, dynamic> summaryMeta;
+  final Map<String, dynamic> pagination;
+  final String activeReportType; // 'attendance' | 'defaulters' | 'overview'
+  final String? warningMessage;  // Non-fatal partial load warning
 
   const ReportsLoaded({
-    required this.summaries,
+    required this.summaryCards,
     required this.trends,
-    required this.detailedData,
-    this.activeType = ReportType.attendance,
+    this.detailedData = const [],
+    this.summaryMeta = const {},
+    this.pagination = const {},
+    this.activeReportType = 'attendance',
+    this.warningMessage,
   });
 
+  ReportsLoaded copyWith({
+    List<Map<String, dynamic>>? summaryCards,
+    List<Map<String, dynamic>>? trends,
+    List<Map<String, dynamic>>? detailedData,
+    Map<String, dynamic>? summaryMeta,
+    Map<String, dynamic>? pagination,
+    String? activeReportType,
+    String? warningMessage,
+  }) =>
+      ReportsLoaded(
+        summaryCards: summaryCards ?? this.summaryCards,
+        trends: trends ?? this.trends,
+        detailedData: detailedData ?? this.detailedData,
+        summaryMeta: summaryMeta ?? this.summaryMeta,
+        pagination: pagination ?? this.pagination,
+        activeReportType: activeReportType ?? this.activeReportType,
+        warningMessage: warningMessage,
+      );
+
   @override
-  List<Object?> get props => [summaries, trends, detailedData, activeType];
+  List<Object?> get props =>
+      [summaryCards, trends, detailedData, summaryMeta, pagination, activeReportType, warningMessage];
 }
+
 class ReportsError extends ReportsState {
   final String message;
   const ReportsError(this.message);
@@ -35,50 +65,168 @@ class ReportsError extends ReportsState {
   List<Object?> get props => [message];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CUBIT
+// ─────────────────────────────────────────────────────────────────────────────
 class ReportsCubit extends Cubit<ReportsState> {
-  final IReportRepository _repository;
+  final ApiClient _api;
 
-  ReportsCubit(this._repository) : super(ReportsInitial());
+  ReportsCubit(this._api) : super(ReportsInitial());
 
+  /// Load summary cards AND trends independently.
+  /// If one fails, the other still shows — no full-page error on partial failure.
   Future<void> loadDashboard() async {
     emit(ReportsLoading());
-    
-    final summaryRes = await _repository.getDashboardSummary();
-    final trendsRes = await _repository.getAttendanceTrends(
-      start: DateTime.now().subtract(const Duration(days: 7)),
-      end: DateTime.now(),
-    );
 
-    summaryRes.fold(
-      (err) => emit(ReportsError(err)),
-      (summaries) {
-        trendsRes.fold(
-          (err) => emit(ReportsError(err)),
-          (trends) => emit(ReportsLoaded(
-            summaries: summaries,
-            trends: trends,
-            detailedData: const [],
-          )),
-        );
-      },
-    );
+    List<Map<String, dynamic>> summaryCards = [];
+    List<Map<String, dynamic>> trends = [];
+    String? warning;
+
+    // ── Summary cards ──────────────────────────────────────────────────────
+    try {
+      final res = await _api.get('/api/reports/summary/');
+      summaryCards = _extractList(res.data, ['data', 'summaries', 'results']);
+    } catch (e) {
+      warning = 'Summary cards could not load: $e';
+    }
+
+    // ── Attendance trends (last 30 days) ────────────────────────────────────
+    try {
+      final res = await _api.get('/api/reports/trends/', params: {'days': '30'});
+      trends = _extractList(res.data, ['data', 'trends', 'results']);
+    } catch (e) {
+      // Trends are non-critical — just empty the chart
+      if (warning != null) {
+        warning = '$warning\nTrends chart unavailable.';
+      }
+    }
+
+    emit(ReportsLoaded(
+      summaryCards: summaryCards,
+      trends: trends,
+      warningMessage: warning,
+    ));
   }
 
-  Future<void> loadDetailedReport(ReportType type, {Map<String, dynamic>? filters}) async {
-    if (state is! ReportsLoaded) return;
-    final currentState = state as ReportsLoaded;
-    
+  /// Load teacher/admin attendance summary with dynamic advanced query filters.
+  Future<void> loadAttendanceSummary({
+    required Map<String, dynamic> queryParams,
+  }) async {
+    final current = state is ReportsLoaded ? state as ReportsLoaded : null;
     emit(ReportsLoading());
-    final res = await _repository.getDetailedReport(type: type, filters: filters);
-    
-    res.fold(
-      (err) => emit(ReportsError(err)),
-      (data) => emit(ReportsLoaded(
-        summaries: currentState.summaries,
-        trends: currentState.trends,
-        detailedData: data,
-        activeType: type,
-      )),
-    );
+
+    try {
+      final res = await _api.get('/api/reports/attendance-summary/', params: queryParams);
+
+      final raw = res.data;
+      final dataMap = (raw is Map && raw['data'] is Map)
+          ? raw['data'] as Map<String, dynamic>
+          : <String, dynamic>{};
+
+      final students = (dataMap['students'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      final summary = (dataMap['summary'] as Map? ?? {})
+          .map((k, v) => MapEntry(k.toString(), v));
+
+      final pagination = (dataMap['pagination'] as Map? ?? {})
+          .map((k, v) => MapEntry(k.toString(), v));
+
+      emit(ReportsLoaded(
+        summaryCards: current?.summaryCards ?? [],
+        trends: current?.trends ?? [],
+        detailedData: students,
+        summaryMeta: summary,
+        pagination: pagination,
+        activeReportType: 'attendance',
+      ));
+    } catch (e) {
+      emit(ReportsError('Failed to load attendance summary: $e'));
+    }
+  }
+
+  /// Load defaulters list.
+  Future<void> loadDefaulters({
+    String? allocationId,
+    double threshold = 75.0,
+  }) async {
+    final current = state is ReportsLoaded ? state as ReportsLoaded : null;
+    emit(ReportsLoading());
+
+    try {
+      final params = <String, dynamic>{'threshold': threshold.toString()};
+      if (allocationId != null) params['allocation_id'] = allocationId;
+
+      final res = await _api.get('/api/reports/defaulters/', params: params);
+      final raw = res.data;
+      final inner = (raw is Map && raw['data'] is Map)
+          ? raw['data'] as Map
+          : (raw is Map ? raw : <String, dynamic>{});
+
+      final defaulters = (inner['defaulters'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      emit(ReportsLoaded(
+        summaryCards: current?.summaryCards ?? [],
+        trends: current?.trends ?? [],
+        detailedData: defaulters,
+        activeReportType: 'defaulters',
+      ));
+    } catch (e) {
+      emit(ReportsError('Failed to load defaulters: $e'));
+    }
+  }
+
+  /// Load college overview (Principal / HOD).
+  Future<void> loadCollegeOverview() async {
+    emit(ReportsLoading());
+    try {
+      final res = await _api.get('/api/reports/college/overview/');
+      final raw = res.data;
+      final inner = (raw is Map && raw['data'] is Map)
+          ? raw['data'] as Map
+          : (raw is Map ? raw : <String, dynamic>{});
+
+      final subjects = (inner['subjects'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      emit(ReportsLoaded(
+        summaryCards: _buildOverviewCards(inner['overview'] as Map?),
+        trends: [],
+        detailedData: subjects,
+        activeReportType: 'overview',
+      ));
+    } catch (e) {
+      emit(ReportsError('Failed to load college overview: $e'));
+    }
+  }
+
+  List<Map<String, dynamic>> _buildOverviewCards(Map? overview) {
+    if (overview == null) return [];
+    return [
+      {'title': 'Total Subjects',   'value': '${overview['total_subjects'] ?? 0}',   'is_positive': true},
+      {'title': 'Total Students',   'value': '${overview['total_students'] ?? 0}',   'is_positive': true},
+      {'title': 'At Risk Students', 'value': '${overview['total_at_risk'] ?? 0}',    'is_positive': false},
+      {'title': 'College Avg',      'value': '${overview['college_avg_pct'] ?? 0}%', 'is_positive': true},
+    ];
+  }
+
+  List<Map<String, dynamic>> _extractList(dynamic raw, List<String> keys) {
+    if (raw == null) return [];
+    if (raw is List) {
+      return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    if (raw is Map) {
+      for (final k in keys) {
+        final v = raw[k];
+        if (v is List) {
+          return v.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    }
+    return [];
   }
 }
