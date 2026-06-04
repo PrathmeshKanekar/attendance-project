@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:smart_campus_app/core/layout/app_layout.dart';
 import 'package:smart_campus_app/core/services/device_service.dart';
 import 'package:smart_campus_app/features/face_scan/face_scan_params.dart';
 import 'providers/attendance_state_provider.dart';
@@ -52,21 +53,9 @@ class _MarkAttendanceScreenState extends ConsumerState<MarkAttendanceScreen> wit
     final IconData statusIcon = _getStatusIcon(state.status);
     final bool canSubmit = state.status == AttendanceValidationStatus.inside;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F172A), // Slate 900 primary background
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF1E293B),
-        elevation: 0,
-        title: Text(
-          widget.session.subjectName,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-          onPressed: () => context.pop(),
-        ),
-      ),
-      body: SafeArea(
+    return AppLayout(
+      title: widget.session.subjectName,
+      child: SafeArea(
         child: Column(
           children: [
             // STEP PROGRESS TRACKER HUD
@@ -213,7 +202,7 @@ class _MarkAttendanceScreenState extends ConsumerState<MarkAttendanceScreen> wit
                           const Divider(color: Colors.white10, height: 20),
                           Row(
                             children: [
-                              const Icon(Icons.security_rounded, size: 16, color: Colors.emerald),
+                              const Icon(Icons.security_rounded, size: 16, color: Colors.green),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -241,7 +230,7 @@ class _MarkAttendanceScreenState extends ConsumerState<MarkAttendanceScreen> wit
                           ),
                         ),
                         onPressed: canSubmit ? _navigateToFaceScan : null,
-                        icon: const Icon(Icons.face_retouching_helper_rounded),
+                        icon: const Icon(Icons.face_rounded),
                         label: Text(
                           canSubmit ? 'Verify Face & Liveness →' : 'Geofence Verification Required',
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),

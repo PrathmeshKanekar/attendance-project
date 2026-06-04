@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../constants/app_colors.dart';
@@ -10,6 +11,8 @@ class AppLayout extends StatelessWidget {
   final Widget        child;
   final List<Widget>? actions;
   final Widget?       fab;
+  final Widget?       endDrawer;
+  final GlobalKey<ScaffoldState>? scaffoldKey;
 
   const AppLayout({
     super.key,
@@ -17,6 +20,8 @@ class AppLayout extends StatelessWidget {
     required this.child,
     this.actions,
     this.fab,
+    this.endDrawer,
+    this.scaffoldKey,
   });
 
   static const double _breakpoint = 800;
@@ -26,19 +31,84 @@ class AppLayout extends StatelessWidget {
     final width     = MediaQuery.of(context).size.width;
     final isDesktop = width > _breakpoint;
 
+    String location = '';
+    try {
+      location = GoRouterState.of(context).matchedLocation;
+    } catch (_) {}
+
+    final bool isDashboard = location == '/student/dashboard' ||
+        location == '/teacher/dashboard' ||
+        location == '/principal/dashboard' ||
+        location == '/hod/dashboard' ||
+        location == '/admin/dashboard' ||
+        location == '/super-admin/dashboard';
+
+    Widget layoutWidget;
     if (isDesktop) {
-      return _DesktopLayout(
+      layoutWidget = _DesktopLayout(
         title  : title,
         actions: actions,
         fab    : fab,
+        endDrawer: endDrawer,
+        scaffoldKey: scaffoldKey,
+        child  : child,
+      );
+    } else {
+      layoutWidget = _MobileLayout(
+        title  : title,
+        actions: actions,
+        fab    : fab,
+        endDrawer: endDrawer,
+        scaffoldKey: scaffoldKey,
         child  : child,
       );
     }
-    return _MobileLayout(
-      title  : title,
-      actions: actions,
-      fab    : fab,
-      child  : child,
+
+    return PopScope(
+      canPop: !isDashboard,
+      onPopInvoked: (bool didPop) async {
+        if (didPop) return;
+
+        if (isDashboard && context.mounted) {
+          final shouldExit = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Row(
+                children: [
+                  Icon(Icons.exit_to_app_rounded, color: AppColors.primaryLight),
+                  const SizedBox(width: 8),
+                  Text('Exit Application?'),
+                ],
+              ),
+              content: const Text('Are you sure you want to close the Smart Campus ERP application?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text('Exit'),
+                ),
+              ],
+            ),
+          );
+          if (shouldExit == true) {
+            SystemNavigator.pop();
+          }
+        }
+      },
+      child: layoutWidget,
     );
   }
 }
@@ -49,18 +119,24 @@ class _DesktopLayout extends StatelessWidget {
   final Widget        child;
   final List<Widget>? actions;
   final Widget?       fab;
+  final Widget?       endDrawer;
+  final GlobalKey<ScaffoldState>? scaffoldKey;
 
   const _DesktopLayout({
     required this.title,
     required this.child,
     this.actions,
     this.fab,
+    this.endDrawer,
+    this.scaffoldKey,
   });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: scaffoldKey,
       floatingActionButton: fab,
+      endDrawer: endDrawer,
       body: Row(
         children: [
           // CRITICAL FIX: sidebar is ALWAYS rendered
@@ -90,18 +166,24 @@ class _MobileLayout extends StatelessWidget {
   final Widget        child;
   final List<Widget>? actions;
   final Widget?       fab;
+  final Widget?       endDrawer;
+  final GlobalKey<ScaffoldState>? scaffoldKey;
 
   const _MobileLayout({
     required this.title,
     required this.child,
     this.actions,
     this.fab,
+    this.endDrawer,
+    this.scaffoldKey,
   });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: scaffoldKey,
       drawer              : const Drawer(child: AppSidebar(isDrawer: true)),
+      endDrawer           : endDrawer,
       floatingActionButton: fab,
       appBar: AppBar(
         title           : Text(title),

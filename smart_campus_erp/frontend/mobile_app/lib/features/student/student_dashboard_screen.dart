@@ -169,11 +169,16 @@ class _DashboardBody extends ConsumerWidget {
                   itemBuilder   : (context, i) {
                     final s = sessions[i];
                     final alreadyMarked = s['already_marked'] == true;
+                    final isPaused = s['is_paused'] == true;
+
                     return Container(
                       decoration: BoxDecoration(
                         color       : AppColors.cardBg,
                         borderRadius: BorderRadius.circular(14),
-                        border      : Border.all(color: AppColors.borderColor),
+                        border      : Border.all(
+                          color: isPaused ? AppColors.danger.withOpacity(0.4) : AppColors.borderColor,
+                          width: isPaused ? 1.2 : 1.0,
+                        ),
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(14),
@@ -183,7 +188,9 @@ class _DashboardBody extends ConsumerWidget {
                             children: [
                               Container(
                                 width: 4,
-                                color: alreadyMarked ? AppColors.primaryLight : AppColors.success,
+                                color: alreadyMarked
+                                    ? AppColors.primaryLight
+                                    : (isPaused ? AppColors.danger : AppColors.success),
                               ),
                               Expanded(
                                 child: Padding(
@@ -196,7 +203,7 @@ class _DashboardBody extends ConsumerWidget {
                                         decoration: BoxDecoration(
                                           color : alreadyMarked
                                               ? AppColors.primaryLight
-                                              : AppColors.success,
+                                              : (isPaused ? AppColors.danger : AppColors.success),
                                           shape : BoxShape.circle,
                                         ),
                                       ),
@@ -221,6 +228,24 @@ class _DashboardBody extends ConsumerWidget {
                                                 fontSize: 12,
                                               ),
                                             ),
+                                            if (isPaused) ...[
+                                              const SizedBox(height: 6),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.danger.withOpacity(0.12),
+                                                  borderRadius: BorderRadius.circular(4),
+                                                ),
+                                                child: const Text(
+                                                  'PAUSED (Teacher Left Room)',
+                                                  style: TextStyle(
+                                                    color: AppColors.danger,
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ],
                                         ),
                                       ),
@@ -237,6 +262,22 @@ class _DashboardBody extends ConsumerWidget {
                                             padding: const EdgeInsets.symmetric(horizontal: 12),
                                             minimumSize: const Size(0, 36),
                                           ),
+                                        )
+                                      else if (isPaused)
+                                        ElevatedButton(
+                                          onPressed: null,
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: AppColors.borderColor,
+                                            foregroundColor: AppColors.textSecondary,
+                                            disabledBackgroundColor: AppColors.borderColor,
+                                            disabledForegroundColor: AppColors.textSecondary,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(10),
+                                            ),
+                                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                                            minimumSize: const Size(0, 36),
+                                          ),
+                                          child: const Text('Paused'),
                                         )
                                       else
                                         ElevatedButton(

@@ -5,6 +5,7 @@ from django.conf import settings
 SESSION_STATUS = [
     ('scheduled', 'Scheduled'),
     ('active', 'Active'),
+    ('paused', 'Paused'),
     ('ended', 'Ended'),
     ('cancelled', 'Cancelled')
 ]

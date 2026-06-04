@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:smart_campus_app/core/constants/app_colors.dart';
 import 'package:smart_campus_app/core/network/api_client.dart';
 import 'package:smart_campus_app/core/providers/auth_provider.dart';
+import 'package:smart_campus_app/core/layout/app_layout.dart';
 import '../cubit/reports_cubit.dart';
 import '../report_providers.dart';
 import '../widgets/attendance_line_chart.dart';
@@ -186,41 +187,23 @@ class _ReportsDashboardPageState extends ConsumerState<ReportsDashboardPage> {
     final authState = ref.watch(authProvider);
     final user = authState is AuthSuccess ? authState.user : null;
 
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: AppColors.bgPrimary,
-      appBar: AppBar(
-        backgroundColor: AppColors.bgPrimary,
-        elevation: 0,
-        centerTitle: false,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Attendance Analytics',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-            ),
-            Text(
-              'Enterprise Workspace · ${user?.role.toUpperCase()}',
-              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.tune_rounded, color: AppColors.primary),
-            tooltip: 'Advanced Filters',
-            onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
-            tooltip: 'Refresh Workspace',
-            onPressed: _applyFilters,
-          ),
-        ],
-      ),
+    return AppLayout(
+      scaffoldKey: _scaffoldKey,
       endDrawer: _buildFilterDrawer(user?.role),
-      body: BlocBuilder<ReportsCubit, ReportsState>(
+      title: 'Attendance Analytics',
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.tune_rounded, color: AppColors.primary),
+          tooltip: 'Advanced Filters',
+          onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+        ),
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
+          tooltip: 'Refresh Workspace',
+          onPressed: _applyFilters,
+        ),
+      ],
+      child: BlocBuilder<ReportsCubit, ReportsState>(
         builder: (context, state) {
           if (state is ReportsLoading) {
             return const Center(

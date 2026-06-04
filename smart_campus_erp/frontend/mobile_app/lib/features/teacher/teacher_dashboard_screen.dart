@@ -11,6 +11,7 @@ import '../../core/widgets/error_widget.dart';
 import '../../core/widgets/empty_state_widget.dart';
 import '../../core/widgets/stat_card.dart';
 import 'providers/teacher_providers.dart';
+import 'services/teacher_session_heartbeat_service.dart';
 
 class TeacherDashboardScreen extends ConsumerWidget {
   const TeacherDashboardScreen({super.key});
@@ -20,7 +21,7 @@ class TeacherDashboardScreen extends ConsumerWidget {
     return AppLayout(
       title: 'Teacher Dashboard',
       fab  : FloatingActionButton.extended(
-        onPressed      : () => context.go('/teacher/sessions'),
+        onPressed      : () => context.push('/teacher/sessions'),
         icon           : const Icon(Icons.play_arrow_rounded),
         label          : const Text('Start Session'),
         backgroundColor: AppColors.success,
@@ -156,7 +157,7 @@ class _TeacherDashboardBody extends ConsumerWidget {
                   ),
                 ),
                 TextButton(
-                  onPressed: () => context.go('/teacher/sessions'),
+                  onPressed: () => context.push('/teacher/sessions'),
                   child    : const Text('View All'),
                 ),
               ],
@@ -198,7 +199,7 @@ class _TeacherDashboardBody extends ConsumerWidget {
                         ),
                         const SizedBox(height: 10),
                         ElevatedButton(
-                          onPressed: () => context.go('/teacher/sessions'),
+                          onPressed: () => context.push('/teacher/sessions'),
                           style    : ElevatedButton.styleFrom(
                             backgroundColor: AppColors.success,
                           ),
@@ -274,7 +275,7 @@ class _TeacherDashboardBody extends ConsumerWidget {
                           _SubjectTile(
                             allocation: allocs[i],
                             onStart   : () =>
-                                context.go('/teacher/sessions'),
+                                context.push('/teacher/sessions'),
                           ),
                     ),
             ),
@@ -288,31 +289,60 @@ class _TeacherDashboardBody extends ConsumerWidget {
 }
 
 // ── Active session card ────────────────────────────────────
-class _ActiveSessionCard extends StatelessWidget {
+class _ActiveSessionCard extends ConsumerStatefulWidget {
   final Map<String, dynamic> session;
   final VoidCallback         onEnd;
   final VoidCallback         onViewLogs;
 
   const _ActiveSessionCard({
+    super.key,
     required this.session,
     required this.onEnd,
     required this.onViewLogs,
   });
 
   @override
+  ConsumerState<_ActiveSessionCard> createState() => _ActiveSessionCardState();
+}
+
+class _ActiveSessionCardState extends ConsumerState<_ActiveSessionCard> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(teacherSessionHeartbeatProvider.notifier).startHeartbeat(
+        widget.session['id'].toString(),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    // Stop heartbeat tracker when card is destroyed
+    ref.read(teacherSessionHeartbeatProvider.notifier).stopHeartbeat();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     // Safe parsing with defaults
-    final present = (session['present_count'] as num?)?.toInt() ?? 0;
-    final total   = (session['total_students'] as num?)?.toInt() ?? 0;
-    final pct     = (session['attendance_pct']  as num?)?.toDouble() ?? 
+    final present = (widget.session['present_count'] as num?)?.toInt() ?? 0;
+    final total   = (widget.session['total_students'] as num?)?.toInt() ?? 0;
+    final pct     = (widget.session['attendance_pct']  as num?)?.toDouble() ?? 
                     (total > 0 ? (present / total) * 100 : 0.0);
+
+    final heartbeatState = ref.watch(teacherSessionHeartbeatProvider);
+    final isPaused = heartbeatState.isTracking && heartbeatState.sessionStatus == 'paused';
 
     return Container(
       margin    : const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color       : AppColors.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border      : Border.all(color: AppColors.borderColor),
+        border      : Border.all(
+          color: isPaused ? AppColors.danger.withOpacity(0.5) : AppColors.borderColor,
+          width: isPaused ? 1.5 : 1.0,
+        ),
         boxShadow   : [
           BoxShadow(
             color : Colors.black.withOpacity(0.03),
@@ -329,7 +359,7 @@ class _ActiveSessionCard extends StatelessWidget {
               // Colored Status Stripe (Replaces non-uniform border)
               Container(
                 width: 6,
-                color: AppColors.success,
+                color: isPaused ? AppColors.danger : AppColors.success,
               ),
               Expanded(
                 child: Padding(
@@ -339,27 +369,55 @@ class _ActiveSessionCard extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          _PulsingDot(),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color       : AppColors.success.withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Text(
-                              'LIVE',
-                              style: TextStyle(
-                                color: AppColors.success, fontSize: 11,
-                                fontWeight: FontWeight.w800, letterSpacing: 1,
+                          if (!isPaused) ...[
+                            _PulsingDot(),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color       : AppColors.success.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                'LIVE',
+                                style: TextStyle(
+                                  color: AppColors.success, fontSize: 11,
+                                  fontWeight: FontWeight.w800, letterSpacing: 1,
+                                ),
                               ),
                             ),
-                          ),
+                          ] else ...[
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                color: AppColors.danger,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color       : AppColors.danger.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                'PAUSED',
+                                style: TextStyle(
+                                  color: AppColors.danger, fontSize: 11,
+                                  fontWeight: FontWeight.w800, letterSpacing: 1,
+                                ),
+                              ),
+                            ),
+                          ],
                           const Spacer(),
                           Text(
-                            'Code: ${session['session_code'] ?? 'N/A'}',
+                            'Code: ${widget.session['session_code'] ?? 'N/A'}',
                             style: const TextStyle(
                               color: AppColors.textSecondary, fontSize: 13,
                             ),
@@ -368,7 +426,7 @@ class _ActiveSessionCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        session['subject_name']?.toString() ?? 'Untitled Subject',
+                        widget.session['subject_name']?.toString() ?? 'Untitled Subject',
                         style: const TextStyle(
                           fontSize: 18, fontWeight: FontWeight.bold,
                           color   : AppColors.textPrimary,
@@ -376,13 +434,43 @@ class _ActiveSessionCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Div ${session['division_name'] ?? 'A'} · '
-                        'Year ${session['year_of_study'] ?? 'N/A'} · '
-                        'Room: ${session['room_name'] ?? 'N/A'}',
+                        'Div ${widget.session['division_name'] ?? 'A'} · '
+                        'Year ${widget.session['year_of_study'] ?? 'N/A'} · '
+                        'Room: ${widget.session['room_name'] ?? 'N/A'}',
                         style: const TextStyle(
                           color: AppColors.textSecondary, fontSize: 13,
                         ),
                       ),
+
+                      // Geofence Danger Warning Alert
+                      if (heartbeatState.isTracking && !heartbeatState.isInside) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.danger.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppColors.danger.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'GEOFENCE WARNING: You are outside the room polygon by ${heartbeatState.distanceToBoundary.toStringAsFixed(1)}m. Attendance is PAUSED.',
+                                  style: const TextStyle(
+                                    color: AppColors.danger,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
                       const SizedBox(height: 16),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -399,9 +487,9 @@ class _ActiveSessionCard extends StatelessWidget {
                               ),
                               Text(
                                 '${pct.toStringAsFixed(1)}%',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.bold, fontSize: 14,
-                                  color: AppColors.success,
+                                  color: isPaused ? AppColors.danger : AppColors.success,
                                 ),
                               ),
                             ],
@@ -412,8 +500,8 @@ class _ActiveSessionCard extends StatelessWidget {
                             child       : LinearProgressIndicator(
                               value     : total > 0 ? present / total : 0,
                               backgroundColor: AppColors.bgSecondary,
-                              valueColor : const AlwaysStoppedAnimation(
-                                AppColors.success,
+                              valueColor : AlwaysStoppedAnimation(
+                                isPaused ? AppColors.danger : AppColors.success,
                               ),
                               minHeight  : 8,
                             ),
@@ -435,7 +523,7 @@ class _ActiveSessionCard extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
-                              onPressed: onViewLogs,
+                              onPressed: widget.onViewLogs,
                               icon : const Icon(Icons.list_alt_rounded, size: 18),
                               label: const Text('Logs'),
                             ),
@@ -450,7 +538,7 @@ class _ActiveSessionCard extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
-                              onPressed: onEnd,
+                              onPressed: widget.onEnd,
                               icon : const Icon(
                                 Icons.stop_circle_rounded, size: 18,
                               ),

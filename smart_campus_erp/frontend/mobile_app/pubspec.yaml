@@ -59,6 +59,8 @@ dependencies:
   share_plus: ^12.0.2
   flutter_unity_widget: ^2022.2.1
   file_picker: ^11.0.2
+  flutter_map: ^8.3.0
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:

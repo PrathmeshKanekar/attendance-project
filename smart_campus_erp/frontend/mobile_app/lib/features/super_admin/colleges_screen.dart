@@ -623,6 +623,9 @@ class _CollegeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     // ROBUST DATA BINDING: Support multiple possible keys and handle nulls
     final name       = (college['name'] ?? college['college_name'] ?? 'Unknown').toString();
     final code       = (college['code'] ?? college['college_code'] ?? '').toString();
@@ -637,9 +640,19 @@ class _CollegeCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.borderColor),
+        color: isDark ? AppColors.darkCardBg : AppColors.cardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? AppColors.darkBorderColor : AppColors.borderColor,
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.2 : 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: IntrinsicHeight(
         child: Row(
@@ -647,19 +660,19 @@ class _CollegeCard extends StatelessWidget {
           children: [
             // Left Status Bar
             Container(
-              width: 4,
+              width: 5,
               decoration: BoxDecoration(
                 color: statusColor,
                 borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(14),
-                  bottomLeft: Radius.circular(14),
+                  topLeft: Radius.circular(20),
+                  bottomLeft: Radius.circular(20),
                 ),
               ),
             ),
             // Card Content
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(18),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -667,15 +680,16 @@ class _CollegeCard extends StatelessWidget {
                     Row(
                       children: [
                         Container(
-                          width : 44, height: 44,
+                          width: 44,
+                          height: 44,
                           decoration: BoxDecoration(
-                            color       : AppColors.primaryLight.withOpacity(0.10),
+                            color: AppColors.primaryLight.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: const Icon(
                             Icons.school_rounded,
                             color: AppColors.primaryLight,
-                            size : 24,
+                            size: 22,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -685,18 +699,19 @@ class _CollegeCard extends StatelessWidget {
                             children: [
                               Text(
                                 name,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w700,
-                                  fontSize  : 15,
-                                  color     : AppColors.textPrimary,
+                                  fontSize: 15,
+                                  color: isDark ? AppColors.darkTextPrimary : AppColors.textPrimary,
                                 ),
                               ),
                               const SizedBox(height: 3),
                               Text(
                                 domain,
-                                style: const TextStyle(
-                                  color  : AppColors.textSecondary,
+                                style: TextStyle(
+                                  color: isDark ? AppColors.darkTextSecondary : AppColors.textSecondary,
                                   fontSize: 12,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ],
@@ -704,90 +719,108 @@ class _CollegeCard extends StatelessWidget {
                         ),
                         // Status chip
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4,
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                           decoration: BoxDecoration(
-                            color       : isActive
-                                ? AppColors.success.withOpacity(0.10)
-                                : AppColors.danger.withOpacity(0.10),
+                            color: statusColor.withOpacity(0.10),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text(
-                            isActive ? '● Active' : '○ Inactive',
-                            style: TextStyle(
-                              color    : isActive ? AppColors.success : AppColors.danger,
-                              fontSize : 12,
-                              fontWeight: FontWeight.w600,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.circle,
+                                size: 6,
+                                color: statusColor,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                isActive ? 'Active' : 'Inactive',
+                                style: TextStyle(
+                                  color: statusColor,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
 
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
 
                     // ── Info row ──────────────────────────────────
                     Wrap(
-                      spacing    : 12,
-                      runSpacing : 6,
-                      children   : [
+                      spacing: 12,
+                      runSpacing: 6,
+                      children: [
                         _InfoItem(
-                          icon : Icons.tag_rounded,
+                          icon: Icons.tag_rounded,
                           label: code,
+                          isDark: isDark,
                         ),
                         _InfoItem(
-                          icon : Icons.people_rounded,
+                          icon: Icons.people_rounded,
                           label: '$userCount users',
+                          isDark: isDark,
                         ),
                         if (phone.isNotEmpty)
                           _InfoItem(
-                            icon : Icons.phone_rounded,
+                            icon: Icons.phone_rounded,
                             label: phone,
+                            isDark: isDark,
                           ),
                       ],
                     ),
 
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 8),
 
                     _InfoItem(
-                      icon : Icons.location_on_rounded,
+                      icon: Icons.location_on_rounded,
                       label: address,
+                      isDark: isDark,
                     ),
 
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 18),
 
                     // ── Action buttons ────────────────────────────
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         OutlinedButton.icon(
-                          style    : OutlinedButton.styleFrom(
+                          style: OutlinedButton.styleFrom(
                             foregroundColor: isActive ? AppColors.danger : AppColors.success,
-                            side           : BorderSide(
+                            side: BorderSide(
                               color: isActive ? AppColors.danger : AppColors.success,
+                              width: 1.2,
                             ),
-                            minimumSize: const Size(0, 38),
-                            padding    : const EdgeInsets.symmetric(horizontal: 12),
+                            minimumSize: const Size(0, 36),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
                           onPressed: onToggle,
-                          icon : Icon(
-                            isActive
-                                ? Icons.block_rounded
-                                : Icons.check_circle_rounded,
-                            size: 16,
+                          icon: Icon(
+                            isActive ? Icons.block_rounded : Icons.check_circle_rounded,
+                            size: 14,
                           ),
-                          label: Text(isActive ? 'Deactivate' : 'Activate'),
+                          label: Text(
+                            isActive ? 'Deactivate' : 'Activate',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton.icon(
-                          style    : ElevatedButton.styleFrom(
-                            minimumSize: const Size(0, 38),
-                            padding    : const EdgeInsets.symmetric(horizontal: 12),
+                          style: ElevatedButton.styleFrom(
+                            minimumSize: const Size(0, 36),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
                           onPressed: onEdit,
-                          icon : const Icon(Icons.edit_rounded, size: 16),
-                          label: const Text('Edit'),
+                          icon: const Icon(Icons.edit_rounded, size: 14),
+                          label: const Text(
+                            'Edit',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
                         ),
                       ],
                     ),
@@ -803,64 +836,122 @@ class _CollegeCard extends StatelessWidget {
 }
 
 class _InfoItem extends StatelessWidget {
-  final IconData icon; final String label;
-  const _InfoItem({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+  final bool isDark;
+
+  const _InfoItem({
+    required this.icon,
+    required this.label,
+    required this.isDark,
+  });
+
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 14, color: AppColors.textSecondary),
-        const SizedBox(width: 4),
-        Flexible(child: Text(label, style: const TextStyle(
-          color: AppColors.textSecondary, fontSize: 12,
-        ), overflow: TextOverflow.ellipsis)),
+        Icon(icon, size: 14, color: isDark ? AppColors.darkTextSecondary : AppColors.textSecondary),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: isDark ? AppColors.darkTextSecondary : AppColors.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ],
     );
   }
 }
 
 class _SummaryBadge extends StatelessWidget {
-  final String label, value; final Color color;
-  const _SummaryBadge({required this.label, required this.value, required this.color});
+  final String label, value;
+  final Color color;
+
+  const _SummaryBadge({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.25)),
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.20), width: 1.2),
       ),
-      child: Column(children: [
-        Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w800)),
-        Text(label, style: TextStyle(color: color.withOpacity(0.80), fontSize: 11)),
-      ]),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              color: color.withOpacity(0.85),
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _FilterChip extends StatelessWidget {
-  final String label; final bool selected;
-  final Color color; final VoidCallback onTap;
-  const _FilterChip({required this.label, required this.selected,
-      required this.onTap, this.color = AppColors.primaryLight});
+  final String label;
+  final bool selected;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.color = AppColors.primaryLight,
+  });
+
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: selected ? color : AppColors.bgSecondary,
+          color: selected ? color : (isDark ? AppColors.darkBgSecondary : AppColors.bgSecondary),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? color : AppColors.borderColor),
+          border: Border.all(
+            color: selected ? color : (isDark ? AppColors.darkBorderColor : AppColors.borderColor),
+            width: 1.2,
+          ),
         ),
-        child: Text(label, style: TextStyle(
-          color: selected ? Colors.white : AppColors.textSecondary,
-          fontSize: 13, fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-        )),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : (isDark ? AppColors.darkTextSecondary : AppColors.textSecondary),
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          ),
+        ),
       ),
     );
   }
