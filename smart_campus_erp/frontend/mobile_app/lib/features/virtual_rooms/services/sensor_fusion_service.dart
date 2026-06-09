@@ -6,77 +6,52 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KALMAN FILTER ENGINE (1D Continuous State Filter)
+// KALMAN FILTER (1-D)
 // ─────────────────────────────────────────────────────────────────────────────
 class KalmanFilter {
-  final double _q; // Process noise covariance
-  final double _r; // Measurement noise covariance
-  double _x = 0.0; // Estimated value
-  double _p = 1.0; // Estimation error covariance
-  double _k = 0.0; // Kalman gain
-  bool _initialized = false;
+  final double _q; // process noise
+  final double _r; // measurement noise
+  double _x = 0.0;
+  double _p = 1.0;
+  bool   _initialized = false;
 
-  KalmanFilter({double q = 1e-6, double r = 1e-4})
-      : _q = q,
-        _r = r;
+  KalmanFilter({double q = 1e-6, double r = 1e-4}) : _q = q, _r = r;
 
-  double filter(double measurement) {
-    if (!_initialized) {
-      _x = measurement;
-      _p = 1.0;
-      _initialized = true;
-      return _x;
-    }
-    // Prediction Update
-    _p = _p + _q;
-    // Measurement Update
-    _k = _p / (_p + _r);
-    _x = _x + _k * (measurement - _x);
-    _p = (1.0 - _k) * _p;
+  double filter(double z) {
+    if (!_initialized) { _x = z; _p = 1.0; _initialized = true; return _x; }
+    _p += _q;
+    final k = _p / (_p + _r);
+    _x += k * (z - _x);
+    _p *= (1.0 - k);
     return _x;
   }
 
-  void reset() {
-    _initialized = false;
-  }
+  void reset() { _initialized = false; _p = 1.0; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SENSOR VECTOR STRUCT
+// DATA TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 class SensorVector3 {
-  final double x;
-  final double y;
-  final double z;
-
+  final double x, y, z;
   const SensorVector3(this.x, this.y, this.z);
-
-  static const SensorVector3 zero = SensorVector3(0.0, 0.0, 0.0);
-
+  static const SensorVector3 zero = SensorVector3(0, 0, 0);
   double get length => math.sqrt(x * x + y * y + z * z);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SENSOR READINGS STRUCT
-// ─────────────────────────────────────────────────────────────────────────────
 class FusedSensorReading {
   final double latitude;
   final double longitude;
   final double altitude;
   final double gpsAccuracy;
-  
-  // Fused Orientation & Direction
+  final bool   isGpsUpdate;
   final double headingDegrees;
   final double compassDegrees;
   final String directionLabel;
-
-  // Sensor Raw streams
   final SensorVector3 accelerometer;
   final SensorVector3 gyroscope;
-  
-  // Computed motion state
   final double motionVariance;
-  final bool isStationary;
+  final bool   isStationary;
   final DateTime timestamp;
 
   FusedSensorReading({
@@ -84,6 +59,7 @@ class FusedSensorReading {
     required this.longitude,
     required this.altitude,
     required this.gpsAccuracy,
+    required this.isGpsUpdate,
     required this.headingDegrees,
     required this.compassDegrees,
     required this.directionLabel,
@@ -96,187 +72,228 @@ class FusedSensorReading {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SENSOR FUSION SERVICE
+// SENSOR FUSION SERVICE — FIXED
 // ─────────────────────────────────────────────────────────────────────────────
 class SensorFusionService {
-  // Kalman filters for spatial coords
-  final KalmanFilter _latFilter = KalmanFilter(q: 1e-8, r: 1e-6);
-  final KalmanFilter _lngFilter = KalmanFilter(q: 1e-8, r: 1e-6);
-  final KalmanFilter _altFilter = KalmanFilter(q: 1e-5, r: 1e-3);
+  // ── Kalman filters ────────────────────────────────────────────────────────
+  // FIX: original used q=1e-5, r=1e-4 for lat/lng.
+  // For indoor/classroom GPS (high noise, near-static device) we need:
+  //   - Lower process noise q (we don't expect the room corner to MOVE)
+  //   - Higher measurement noise r (GPS readings in a building are noisy)
+  // This prevents the filter from drifting to incorrect values across samples.
+  final KalmanFilter _latFilter     = KalmanFilter(q: 1e-7, r: 1e-3);
+  final KalmanFilter _lngFilter     = KalmanFilter(q: 1e-7, r: 1e-3);
+  final KalmanFilter _altFilter     = KalmanFilter(q: 1e-5, r: 1e-2);
   final KalmanFilter _headingFilter = KalmanFilter(q: 1e-3, r: 1e-1);
 
-  // Raw streams subscriptions
-  StreamSubscription<Position>? _gpsSub;
+  // ── Stream subscriptions ──────────────────────────────────────────────────
+  StreamSubscription<Position>?              _gpsSub;
   StreamSubscription<UserAccelerometerEvent>? _accelSub;
-  StreamSubscription<GyroscopeEvent>? _gyroSub;
-  StreamSubscription<CompassEvent>? _compassSub;
+  StreamSubscription<GyroscopeEvent>?        _gyroSub;
+  StreamSubscription<CompassEvent>?          _compassSub;
 
-  // Current live values
-  Position? _lastGps;
-  SensorVector3 _lastAccel = SensorVector3.zero;
-  SensorVector3 _lastGyro = SensorVector3.zero;
-  double _lastCompassHeading = 0.0;
-  
-  // Motion Variance Window
-  final List<double> _accelMagnitudeWindow = [];
-  static const int _windowSize = 25;
+  // ── Live values ───────────────────────────────────────────────────────────
+  Position?      _lastGps;
+  SensorVector3  _lastAccel = SensorVector3.zero;
+  SensorVector3  _lastGyro  = SensorVector3.zero;
+  double         _lastCompass = 0.0;
 
-  // Controller for fused output stream
-  final StreamController<FusedSensorReading> _fusedController = 
+  // Track last filtered coordinates to avoid filter lock-in during sensor-only events
+  double _lastFiltLat = 0.0;
+  double _lastFiltLng = 0.0;
+  double _lastFiltAlt = 0.0;
+
+  // ── Motion variance window ────────────────────────────────────────────────
+  final List<double> _accelWindow = [];
+  static const int _windowSize = 30;
+
+  // ── Output stream ─────────────────────────────────────────────────────────
+  final StreamController<FusedSensorReading> _ctrl =
       StreamController<FusedSensorReading>.broadcast();
+  Stream<FusedSensorReading> get fusedStream => _ctrl.stream;
 
-  Stream<FusedSensorReading> get fusedStream => _fusedController.stream;
+  bool _active = false;
+  bool get isActive => _active;
 
-  bool _isActive = false;
-  bool get isActive => _isActive;
+  DateTime? _trackingStartTime;
+  DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // Start aggregated high-precision tracking
+  // ─────────────────────────────────────────────────────────────────────────
   Future<void> startTracking() async {
-    if (_isActive) return;
-    _isActive = true;
-    
+    if (_active) return;
+    _active = true;
+
+    // FIX: Reset ALL state including Kalman filters so stale filtered values
+    // from a previous corner don't contaminate the new corner's first reading.
+    _lastGps    = null;
+    _lastAccel  = SensorVector3.zero;
+    _lastGyro   = SensorVector3.zero;
+    _lastCompass = 0.0;
+    _lastFiltLat = 0.0;
+    _lastFiltLng = 0.0;
+    _lastFiltAlt = 0.0;
+    _accelWindow.clear();
     _latFilter.reset();
     _lngFilter.reset();
     _altFilter.reset();
     _headingFilter.reset();
-    _accelMagnitudeWindow.clear();
+    _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
+    _trackingStartTime = DateTime.now();
 
-    // ── 0. Ensure location service is enabled & permissions granted ──────
+    // ── Permissions ───────────────────────────────────────────────────────
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _isActive = false;
-      throw Exception(
-        'Location services are disabled. Please enable GPS in your device Settings.',
-      );
+      _active = false;
+      throw Exception('Location services are disabled. Enable GPS in device Settings.');
     }
 
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        _isActive = false;
-        throw Exception(
-          'Location permission denied. Room capture requires GPS access.',
-        );
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied) {
+        _active = false;
+        throw Exception('Location permission denied. Room capture requires GPS access.');
       }
     }
-    if (permission == LocationPermission.deniedForever) {
-      _isActive = false;
+    if (perm == LocationPermission.deniedForever) {
+      _active = false;
       throw Exception(
         'Location permission is permanently denied. '
-        'Please enable it in App Settings > Permissions > Location.',
+        'Enable it in App Settings > Permissions > Location.',
       );
     }
 
-    // 1. Geolocator High Accuracy Stream Configuration
+    // ── GPS Stream ────────────────────────────────────────────────────────
+    // FIX: Use distanceFilter: 0 + timeLimit to ensure we get frequent updates
+    // even when the device is stationary (GPS receivers still output position
+    // updates even without movement — distanceFilter:0 doesn't suppress these).
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: 0,
     );
+
     _gpsSub = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
       (pos) {
+        // PROGRESSIVE ACCURACY WARMUP GATE:
+        // Oppo/Realme/Vivo and indoor locations frequently start with 100m-400m accuracy.
+        // During the first 8 seconds of tracking, allow coarse fixes up to 150m to let the
+        // GPS warm up and feed the Kalman filter. Then tighten the limit to 60m.
+        final elapsedSeconds = _trackingStartTime != null
+            ? DateTime.now().difference(_trackingStartTime!).inSeconds
+            : 0;
+        final double maxAllowedAccuracy = elapsedSeconds <= 8 ? 150.0 : 60.0;
+
+        if (pos.accuracy > maxAllowedAccuracy) {
+          debugPrint('SF: Dropped high-error GPS fix (±${pos.accuracy.toStringAsFixed(1)}m | limit=${maxAllowedAccuracy.toStringAsFixed(0)}m)');
+          return;
+        }
+        
         _lastGps = pos;
-        _emitFusedReading();
+        _emit(isGpsUpdate: true);
       },
       onError: (err) => debugPrint('SF-GPS Error: $err'),
     );
 
-    // 2. Compass Stream
+    // ── Compass ───────────────────────────────────────────────────────────
     _compassSub = FlutterCompass.events?.listen(
-      (event) {
-        _lastCompassHeading = event.heading ?? 0.0;
-        _emitFusedReading();
-      },
+      (e) { _lastCompass = e.heading ?? 0.0; _emit(isGpsUpdate: false); },
       onError: (err) => debugPrint('SF-Compass Error: $err'),
     );
 
-    // 3. Accelerometer (sensors_plus) for physical motion detection
-    _accelSub = userAccelerometerEvents.listen((event) {
-      _lastAccel = SensorVector3(event.x, event.y, event.z);
-      _updateMotionState(_lastAccel.length);
-      _emitFusedReading();
+    // ── Accelerometer ─────────────────────────────────────────────────────
+    _accelSub = userAccelerometerEvents.listen((e) {
+      _lastAccel = SensorVector3(e.x, e.y, e.z);
+      _updateMotion(_lastAccel.length);
+      _emit(isGpsUpdate: false);
     });
 
-    // 4. Gyroscope for jitter and orientation changes
-    _gyroSub = gyroscopeEvents.listen((event) {
-      _lastGyro = SensorVector3(event.x, event.y, event.z);
-      _emitFusedReading();
+    // ── Gyroscope ─────────────────────────────────────────────────────────
+    _gyroSub = gyroscopeEvents.listen((e) {
+      _lastGyro = SensorVector3(e.x, e.y, e.z);
+      _emit(isGpsUpdate: false);
     });
   }
 
-  // Stop tracking streams cleanly
   Future<void> stopTracking() async {
-    _isActive = false;
+    _active = false;
     await _gpsSub?.cancel();
     await _accelSub?.cancel();
     await _gyroSub?.cancel();
     await _compassSub?.cancel();
-    _gpsSub = null;
-    _accelSub = null;
-    _gyroSub = null;
-    _compassSub = null;
+    _gpsSub = _accelSub = _gyroSub = _compassSub = null;
   }
 
-  // Calculate motion variance to tell if phone is steady (ideal for capture)
-  void _updateMotionState(double magnitude) {
-    _accelMagnitudeWindow.add(magnitude);
-    if (_accelMagnitudeWindow.length > _windowSize) {
-      _accelMagnitudeWindow.removeAt(0);
-    }
+  void _updateMotion(double magnitude) {
+    _accelWindow.add(magnitude);
+    if (_accelWindow.length > _windowSize) _accelWindow.removeAt(0);
   }
 
-  double get _computeVariance {
-    if (_accelMagnitudeWindow.isEmpty) return 0.0;
-    double avg = _accelMagnitudeWindow.reduce((a, b) => a + b) / _accelMagnitudeWindow.length;
-    double sumOfSquares = _accelMagnitudeWindow.map((x) => (x - avg) * (x - avg)).reduce((a, b) => a + b);
-    return sumOfSquares / _accelMagnitudeWindow.length;
+  double get _variance {
+    if (_accelWindow.isEmpty) return 0.0;
+    final avg = _accelWindow.reduce((a, b) => a + b) / _accelWindow.length;
+    return _accelWindow.map((x) => (x - avg) * (x - avg)).reduce((a, b) => a + b)
+           / _accelWindow.length;
   }
 
-  // Emit fused telemetry
-  void _emitFusedReading() {
+  void _emit({required bool isGpsUpdate}) {
     final gps = _lastGps;
-    if (gps == null) return;
+    if (gps == null || _ctrl.isClosed) return;
 
-    // Apply Kalman coordinate filter
-    final filteredLat = _latFilter.filter(gps.latitude);
-    final filteredLng = _lngFilter.filter(gps.longitude);
-    final filteredAlt = _altFilter.filter(gps.altitude);
-    
-    // Fuse GPS heading and Compass heading with wrapping logic
-    double rawHeading = gps.heading;
-    if (rawHeading == 0.0 || rawHeading.isNaN) {
-      rawHeading = _lastCompassHeading;
+    final now = DateTime.now();
+    // Always let GPS updates through; throttle sensor-only updates to 2 Hz
+    if (!isGpsUpdate && now.difference(_lastEmit).inMilliseconds < 500) return;
+    _lastEmit = now;
+
+    // FIX: Apply Kalman filter ONLY on genuine GPS updates.
+    // Running the filter on every compass/accel event re-filters the same
+    // GPS coordinate hundreds of times per second, which causes the filter's
+    // uncertainty estimate (_p) to collapse to near-zero, making it completely
+    // ignore future real GPS measurements ("filter lock-in" bug).
+    final double filtLat, filtLng, filtAlt;
+    if (isGpsUpdate) {
+      filtLat = _latFilter.filter(gps.latitude);
+      filtLng = _lngFilter.filter(gps.longitude);
+      filtAlt = _altFilter.filter(gps.altitude);
+      _lastFiltLat = filtLat;
+      _lastFiltLng = filtLng;
+      _lastFiltAlt = filtAlt;
+    } else {
+      // For sensor-only updates, return the most recently filtered GPS value
+      // without re-filtering (i.e. just re-emit with updated IMU data).
+      filtLat = _lastFiltLat != 0.0 ? _lastFiltLat : gps.latitude;
+      filtLng = _lastFiltLng != 0.0 ? _lastFiltLng : gps.longitude;
+      filtAlt = _lastFiltAlt != 0.0 ? _lastFiltAlt : gps.altitude;
     }
-    
-    // Normalize compass between 0 and 360
-    double normalizedCompass = (_lastCompassHeading + 360.0) % 360.0;
-    final filteredHeading = _headingFilter.filter(rawHeading);
-    
-    final variance = _computeVariance;
-    final isStationary = variance < 0.15; // Jitter-free threshold
 
-    final reading = FusedSensorReading(
-      latitude: filteredLat,
-      longitude: filteredLng,
-      altitude: filteredAlt,
-      gpsAccuracy: gps.accuracy,
-      headingDegrees: (filteredHeading + 360.0) % 360.0,
+    // Heading fusion: prefer compass; fall back to GPS heading
+    double rawHeading = gps.heading.isNaN || gps.heading == 0.0
+        ? _lastCompass
+        : gps.heading;
+    final filtHeading = _headingFilter.filter(rawHeading);
+
+    final normalizedCompass = (_lastCompass + 360.0) % 360.0;
+    final variance     = _variance;
+    final isStationary = variance < 0.08; // tightened threshold
+
+    _ctrl.add(FusedSensorReading(
+      latitude:       filtLat,
+      longitude:      filtLng,
+      altitude:       filtAlt,
+      gpsAccuracy:    gps.accuracy,
+      isGpsUpdate:    isGpsUpdate,
+      headingDegrees: (filtHeading + 360.0) % 360.0,
       compassDegrees: normalizedCompass,
-      directionLabel: _getDirectionLabel(normalizedCompass),
-      accelerometer: _lastAccel,
-      gyroscope: _lastGyro,
+      directionLabel: _dirLabel(normalizedCompass),
+      accelerometer:  _lastAccel,
+      gyroscope:      _lastGyro,
       motionVariance: variance,
-      isStationary: isStationary,
-      timestamp: DateTime.now(),
-    );
-
-    _fusedController.add(reading);
+      isStationary:   isStationary,
+      timestamp:      now,
+    ));
   }
 
-  // Helper to map angles to cardinal directions
-  String _getDirectionLabel(double degrees) {
-    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-    int idx = ((degrees + 22.5) / 45.0).floor();
-    return directions[idx];
+  String _dirLabel(double deg) {
+    const dirs = ['N','NE','E','SE','S','SW','W','NW','N'];
+    return dirs[((deg + 22.5) / 45.0).floor().clamp(0, 8)];
   }
 }

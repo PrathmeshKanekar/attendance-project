@@ -61,6 +61,7 @@ class VirtualRoomModel {
   final double orientationDegrees;
   final double reconstructionQuality;
   final Map<String, dynamic> spatialMetadata;
+  final Map<String, dynamic> boundaryGeoJson;
 
   final String? createdBy;
   final String createdByName;
@@ -84,6 +85,7 @@ class VirtualRoomModel {
     this.orientationDegrees = 0.0,
     this.reconstructionQuality = 100.0,
     this.spatialMetadata = const {},
+    this.boundaryGeoJson = const {},
     this.createdBy,
     this.createdByName = 'Unknown',
     this.createdAt,
@@ -116,6 +118,7 @@ class VirtualRoomModel {
       orientationDegrees: (json['orientation_degrees'] as num? ?? json['orientation'] as num? ?? 0.0).toDouble(),
       reconstructionQuality: (json['reconstruction_quality'] as num? ?? json['quality'] as num? ?? 100.0).toDouble(),
       spatialMetadata: json['spatial_metadata'] as Map<String, dynamic>? ?? const {},
+      boundaryGeoJson: json['boundary_geojson'] as Map<String, dynamic>? ?? const {},
 
       createdBy: json['created_by']?.toString(),
       createdByName: json['created_by_name']?.toString() ?? 'Unknown',
@@ -141,6 +144,7 @@ class VirtualRoomModel {
     'orientation_degrees': orientationDegrees,
     'reconstruction_quality': reconstructionQuality,
     'spatial_metadata': spatialMetadata,
+    'boundary_geojson': boundaryGeoJson,
     'created_by': createdBy,
     'created_by_name': createdByName,
     'created_at': createdAt?.toIso8601String(),
@@ -164,6 +168,7 @@ class VirtualRoomModel {
     double? orientationDegrees,
     double? reconstructionQuality,
     Map<String, dynamic>? spatialMetadata,
+    Map<String, dynamic>? boundaryGeoJson,
     String? createdBy,
     String? createdByName,
     DateTime? createdAt,
@@ -186,6 +191,7 @@ class VirtualRoomModel {
       orientationDegrees: orientationDegrees ?? this.orientationDegrees,
       reconstructionQuality: reconstructionQuality ?? this.reconstructionQuality,
       spatialMetadata: spatialMetadata ?? this.spatialMetadata,
+      boundaryGeoJson: boundaryGeoJson ?? this.boundaryGeoJson,
       createdBy: createdBy ?? this.createdBy,
       createdByName: createdByName ?? this.createdByName,
       createdAt: createdAt ?? this.createdAt,

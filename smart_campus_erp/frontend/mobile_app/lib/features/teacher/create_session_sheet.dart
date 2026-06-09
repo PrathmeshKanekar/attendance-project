@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/loading_widget.dart';
+import '../../utils/geofence_utils.dart';
 import 'providers/teacher_providers.dart';
 
 class CreateSessionSheet extends ConsumerStatefulWidget {
@@ -259,8 +261,43 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
 
     setState(() => _isLocating = true);
 
+    // Show loading overlay
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: Dialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  CircularProgressIndicator(valueColor: AlwaysStoppedAnimation(AppColors.primaryLight)),
+                  SizedBox(width: 20),
+                  Expanded(
+                    child: Text(
+                      'Acquiring GPS Position...',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
     try {
-      // ── CAPTURE TEACHER LIVE LOCATION ──
+      // Capture teacher live location
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -273,21 +310,74 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
       try {
         pos = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.best,
-          timeLimit: const Duration(seconds: 8),
+          timeLimit: const Duration(seconds: 10),
         );
       } catch (_) {
         try {
           pos = await Geolocator.getCurrentPosition(
             desiredAccuracy: LocationAccuracy.high,
-            timeLimit: const Duration(seconds: 4),
+            timeLimit: const Duration(seconds: 5),
           );
         } catch (_) {
           pos = await Geolocator.getLastKnownPosition();
         }
       }
 
+      // Pop the loading dialog/overlay
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
       if (pos == null) {
         throw 'Location acquisition timed out. Please ensure GPS is enabled and try again.';
+      }
+
+      // Check if accuracy is unstable (> 15m)
+      if (pos.accuracy > 15.0) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('GPS Accuracy Error'),
+              content: Text('Your GPS signal is unstable (accuracy: ${pos!.accuracy.toStringAsFixed(1)} meters). Please move closer to a window or an open area and try again. Maximum allowed accuracy is 15 meters.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+
+      // Parse room coordinates and run isPointInsidePolygon check
+      final roomPoly = parsePolygonFromRoom(_selectedRoom);
+      if (roomPoly.isEmpty) {
+        throw 'Classroom coordinates are not configured or are invalid.';
+      }
+
+      final teacherPt = LatLng(pos.latitude, pos.longitude);
+      final isInside = isPointInsidePolygon(teacherPt, roomPoly);
+
+      if (!isInside) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Out of Classroom Boundary'),
+              content: const Text('You must be physically present inside the designated classroom area to start this attendance session. (Current position is outside room limits).'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
       }
 
       await ref.read(createSessionProvider.notifier).createSession({
@@ -326,6 +416,10 @@ class _CreateSessionSheetState extends ConsumerState<CreateSessionSheet> {
         );
       }
     } catch (e) {
+      if (mounted && _isLocating) {
+        // Make sure to pop the dialog if we throw an exception while it's showing
+        Navigator.pop(context);
+      }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

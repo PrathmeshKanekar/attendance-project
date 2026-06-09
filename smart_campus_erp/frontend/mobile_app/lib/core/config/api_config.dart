@@ -13,7 +13,7 @@ class ApiConfig {
   static const String _baseUrlKey = 'custom_base_url';
 
   // ── CENTRALIZED PC LAN IP (Single Source of Truth) ──────────────
-  static const String pcWifiIp = '10.226.203.98';
+  static const String pcWifiIp = '10.41.172.98';
   static const String devIp    = pcWifiIp; // Compatibility alias
   static const String devPort  = '8000';
 

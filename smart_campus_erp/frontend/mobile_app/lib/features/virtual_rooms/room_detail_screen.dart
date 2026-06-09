@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/layout/app_layout.dart';
 import 'providers/virtual_room_providers.dart';
 import 'room_preview_widget.dart';
 import 'room_capture_overlay.dart';
@@ -79,9 +80,9 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     final room = ref.watch(singleVirtualRoomProvider(widget.roomId));
 
     if (room == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Room Details')),
-        body: Center(
+      return AppLayout(
+        title: 'Room Details',
+        child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -111,44 +112,48 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
       accuracy: e.accuracy,
     )).toList();
 
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0B0F19) : Colors.grey.shade50,
-      appBar: AppBar(
-        title: Text(room.name),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_rounded),
-            onPressed: () => context.push(
-              '/admin/virtual-rooms/${room.id}/edit',
-              extra: room.toJson(),
-            ),
+    return AppLayout(
+      title: room.name,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.edit_rounded),
+          onPressed: () => context.push(
+            '/admin/virtual-rooms/${room.id}/edit',
+            extra: room.toJson(),
           ),
-          IconButton(
-            icon: _isDeleting
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.delete_forever_rounded),
-            color: theme.colorScheme.error,
-            onPressed: _isDeleting ? null : () => _confirmDelete(context, room),
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
+        ),
+        IconButton(
+          icon: _isDeleting
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.delete_forever_rounded),
+          color: theme.colorScheme.error,
+          onPressed: _isDeleting ? null : () => _confirmDelete(context, room),
+        ),
+      ],
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Bounding Preview Shape Canvas
+            // Map View with Polygon
             Text(
-              'Boundary Shape Preview',
+              'Room Map View',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
                 color: theme.primaryColor,
                 letterSpacing: 0.5,
               ),
             ),
-            const SizedBox(height: 12),
-            RoomPreviewWidget(corners: readings),
-            const SizedBox(height: 24),
+            RoomPreviewWidget(
+              centerLat: room.centerLat ?? 0.0,
+              centerLng: room.centerLng ?? 0.0,
+              widthMeters: (room.spatialMetadata['width_meters'] as num? ?? 10.0).toDouble(),
+              lengthMeters: (room.spatialMetadata['length_meters'] as num? ?? 12.0).toDouble(),
+              rotationDegrees: (room.spatialMetadata['rotation_degrees'] as num? ?? room.orientationDegrees).toDouble(),
+              confidenceScore: (room.spatialMetadata['confidence_score'] as num? ?? room.reconstructionQuality).toDouble(),
+              interactive: false,
+              height: 320,
+            ),
 
             // Metadata card
             Text(

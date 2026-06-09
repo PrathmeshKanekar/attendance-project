@@ -209,4 +209,20 @@ class AttendanceRepositoryImpl implements IAttendanceRepository {
       return Left(e.toString());
     }
   }
+
+  @override
+  Future<Either<String, Map<String, dynamic>>> getVirtualRoom(String roomId) async {
+    try {
+      final res = await _api.get('/api/virtual-rooms/$roomId/');
+      return Right(Map<String, dynamic>.from(res.data));
+    } catch (e) {
+      if (e is DioException && e.response?.data != null) {
+        final data = e.response!.data;
+        if (data is Map && data.containsKey('error')) {
+          return Left(data['error'].toString());
+        }
+      }
+      return Left(e.toString());
+    }
+  }
 }

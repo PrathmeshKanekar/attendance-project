@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/auth_provider.dart';
+import '../../core/layout/app_layout.dart';
 import 'providers/virtual_room_providers.dart';
 import 'models/virtual_room_model.dart';
 
@@ -75,21 +76,21 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
       return nameMatch || buildingMatch || deptMatch;
     }).toList();
 
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0B0F19) : Colors.grey.shade50,
-      appBar: AppBar(
-        title: const Text(
-          'Virtual Rooms',
-          style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5),
+    return AppLayout(
+      title: 'Virtual Rooms',
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded),
+          onPressed: () => ref.read(virtualRoomsProvider.notifier).fetchRooms(),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => ref.read(virtualRoomsProvider.notifier).fetchRooms(),
-          ),
-        ],
+      ],
+      fab: FloatingActionButton.extended(
+        onPressed: () => context.push('/admin/virtual-rooms/add'),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Add Room'),
+        elevation: 4,
       ),
-      body: Column(
+      child: Column(
         children: [
           // Elegant Search and Header HUD
           Padding(
@@ -186,12 +187,6 @@ class _VirtualRoomsScreenState extends ConsumerState<VirtualRoomsScreen> {
               ),
             ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push('/admin/virtual-rooms/add'),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Room'),
-        elevation: 4,
       ),
     );
   }

@@ -1,441 +1,537 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'dart:math' as math;
-import 'room_capture_overlay.dart';
-import 'services/room_reconstruction_engine.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:async';
+import '../../core/config/map_config.dart';
 
-class RoomPreviewWidget extends StatelessWidget {
-  final List<RoomCornerReading> corners;
+class RoomPreviewWidget extends StatefulWidget {
+  final double centerLat;
+  final double centerLng;
+  final double widthMeters;
+  final double lengthMeters;
+  final double rotationDegrees;
+  final double confidenceScore;
   final double height;
+  final bool interactive;
+  final List<LatLng>? roomPolygonPoints;
+  
+  // Callback when user interactively edits geometry via HUD controls
+  final Function(double newLat, double newLng, double newWidth, double newLength, double newRotation)? onGeometryChanged;
 
   const RoomPreviewWidget({
     Key? key,
-    required this.corners,
-    this.height = 280.0,
+    required this.centerLat,
+    required this.centerLng,
+    required this.widthMeters,
+    required this.lengthMeters,
+    required this.rotationDegrees,
+    this.confidenceScore = 100.0,
+    this.height = 340.0,
+    this.interactive = true,
+    this.roomPolygonPoints,
+    this.onGeometryChanged,
   }) : super(key: key);
+
+  @override
+  State<RoomPreviewWidget> createState() => _RoomPreviewWidgetState();
+}
+
+class _RoomPreviewWidgetState extends State<RoomPreviewWidget> {
+  StreamSubscription<Position>? _positionSubscription;
+  LatLng? _liveUserLocation;
+  late MapController _mapController;
+
+  @override
+  void initState() {
+    super.initState();
+    _mapController = MapController();
+    _subscribeToLiveLocation();
+  }
+
+  @override
+  void dispose() {
+    _positionSubscription?.cancel();
+    super.dispose();
+  }
+
+  // ── Subscribes to live user location for comparative geofencing overlay ─────
+  void _subscribeToLiveLocation() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
+        _positionSubscription = Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 1,
+          ),
+        ).listen((Position pos) {
+          if (mounted) {
+            setState(() {
+              _liveUserLocation = LatLng(pos.latitude, pos.longitude);
+            });
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  // ── Rotated Rectangle Geodetic Generator ──────────────────────────────────
+  List<LatLng> _generateRotatedRectangle() {
+    if (widget.centerLat == 0.0 && widget.centerLng == 0.0) return [];
+
+    final double latRad = widget.centerLat * math.pi / 180.0;
+    
+    // Exact WGS84 length of one degree of latitude & longitude in meters
+    const double metersPerDegreeLat = 110574.0;
+    final double metersPerDegreeLng = 111320.0 * math.cos(latRad);
+    
+    final double rotationRad = widget.rotationDegrees * math.pi / 180.0;
+    final cosRot = math.cos(rotationRad);
+    final sinRot = math.sin(rotationRad);
+    
+    final hw = widget.widthMeters / 2.0;
+    final hl = widget.lengthMeters / 2.0;
+    
+    // Unrotated Cartesian corner offsets: (East, North)
+    final List<math.Point<double>> unrotatedOffsets = [
+      math.Point(hw, hl),    // Corner 1: Top-Right
+      math.Point(hw, -hl),   // Corner 2: Bottom-Right
+      math.Point(-hw, -hl),  // Corner 3: Bottom-Left
+      math.Point(-hw, hl),   // Corner 4: Top-Left
+    ];
+    
+    return unrotatedOffsets.map((p) {
+      // Apply clockwise rotation from North
+      final dx = p.x * cosRot + p.y * sinRot;
+      final dy = -p.x * sinRot + p.y * cosRot;
+      
+      final latOffset = dy / metersPerDegreeLat;
+      final lngOffset = dx / metersPerDegreeLng;
+      
+      return LatLng(widget.centerLat + latOffset, widget.centerLng + lngOffset);
+    }).toList();
+  }
+
+  // ── GIS Shift and Tweak Math ──────────────────────────────────────────────
+  void _tweakGeometry({
+    double dLat = 0.0,
+    double dLng = 0.0,
+    double dWidth = 0.0,
+    double dLength = 0.0,
+    double dRotation = 0.0,
+  }) {
+    if (widget.onGeometryChanged == null) return;
+    
+    final newLat = widget.centerLat + dLat;
+    final newLng = widget.centerLng + dLng;
+    final newWidth = (widget.widthMeters + dWidth).clamp(2.0, 100.0);
+    final newLength = (widget.lengthMeters + dLength).clamp(2.0, 100.0);
+    final newRotation = (widget.rotationDegrees + dRotation + 360.0) % 360.0;
+
+    widget.onGeometryChanged!(newLat, newLng, newWidth, newLength, newRotation);
+  }
+
+  // Shifts center in local tangent space (meters)
+  void _shiftCenterMeters(double eastMeters, double northMeters) {
+    final double latRad = widget.centerLat * math.pi / 180.0;
+    const double metersPerDegreeLat = 110574.0;
+    final double metersPerDegreeLng = 111320.0 * math.cos(latRad);
+
+    final dLat = northMeters / metersPerDegreeLat;
+    final dLng = eastMeters / metersPerDegreeLng;
+
+    _tweakGeometry(dLat: dLat, dLng: dLng);
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    if (corners.isEmpty) {
-      return Container(
-        height: height,
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : Colors.grey.shade200,
-          ),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.spatial_tracking_rounded,
-                color: theme.disabledColor.withOpacity(0.4),
-                size: 56,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Awaiting Corner Captures',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: theme.disabledColor,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Walk to corners and capture GPS + Sensor fusion data.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.disabledColor.withOpacity(0.7),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+    final hasCenter = widget.centerLat != 0.0 && widget.centerLng != 0.0;
+    if (!hasCenter) {
+      return _buildEmptyState(theme, isDark);
     }
 
-    // Attempt reconstruction to display metadata directly
-    ReconstructedRoom? reconstructed;
-    try {
-      reconstructed = RoomReconstructionEngine.reconstruct(corners);
-    } catch (e) {
-      debugPrint('Reconstruction error: $e');
-    }
+    final polyPoints = widget.roomPolygonPoints ?? _generateRotatedRectangle();
+    final center = LatLng(widget.centerLat, widget.centerLng);
 
     return Container(
-      height: height,
-      padding: const EdgeInsets.all(12),
+      height: widget.interactive ? widget.height + 120.0 : widget.height,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: theme.primaryColor.withOpacity(0.25),
           width: 1.5,
         ),
       ),
-      child: Stack(
-        children: [
-          // 1. Grid Background
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _GridPainter(
-                gridColor: isDark
-                    ? Colors.white.withOpacity(0.04)
-                    : Colors.black.withOpacity(0.03),
-              ),
-            ),
-          ),
-          
-          // 2. Blueprint Canvas Painter
-          Positioned.fill(
-            child: ClipRect(
-              child: CustomPaint(
-                painter: _BlueprintPainter(
-                  corners: corners,
-                  reconstructed: reconstructed,
-                  primaryColor: theme.primaryColor,
-                  accentColor: theme.colorScheme.secondary,
-                  isDark: isDark,
-                ),
-              ),
-            ),
-          ),
-
-          // 3. Top HUD Dial (Quality & Compass Heading)
-          if (reconstructed != null) ...[
-            Positioned(
-              top: 8,
-              right: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: (isDark ? const Color(0xFF1E293B) : Colors.white).withOpacity(0.9),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: Row(
-                  children: [
-                    // Heading Arrow Indicator
-                    Transform.rotate(
-                      angle: -reconstructed.orientationAngleDegrees * math.pi / 180.0,
-                      child: const Icon(Icons.navigation_rounded, size: 14, color: Colors.redAccent),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${reconstructed.orientationAngleDegrees.toStringAsFixed(0)}° N',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: theme.primaryColor,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(23),
+        child: Column(
+          children: [
+            // ── Interactive Map Canvas ──────────────────────────────────────────
+            Expanded(
+              child: Stack(
+                children: [
+                  FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: center,
+                      initialZoom: 19.5,
+                      interactionOptions: const InteractionOptions(
+                        flags: InteractiveFlag.all,
                       ),
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate: MapConfig.urlTemplate,
+                        subdomains: MapConfig.subdomains,
+                        additionalOptions: MapConfig.headers,
+                        userAgentPackageName: MapConfig.userAgentPackageName,
+                        maxZoom: 22,
+                      ),
+
+                      // Room rotated rectangle polygon layer
+                      if (polyPoints.isNotEmpty)
+                        PolygonLayer(
+                          polygons: [
+                            Polygon(
+                              points: polyPoints,
+                              color: theme.primaryColor.withOpacity(0.18),
+                              borderColor: theme.primaryColor,
+                              borderStrokeWidth: 3.5,
+                            ),
+                          ],
+                        ),
+
+                      // Center point coordinate pin
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: center,
+                            width: 24,
+                            height: 24,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.tealAccent.shade700,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 2),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.teal.withOpacity(0.4),
+                                    blurRadius: 6,
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(Icons.location_on_rounded, size: 14, color: Colors.white),
+                            ),
+                          ),
+                          
+                          // Corner index numerical indicators
+                          for (int i = 0; i < polyPoints.length; i++)
+                            Marker(
+                              point: polyPoints[i],
+                              width: 20,
+                              height: 20,
+                              child: Container(
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF0F172A),
+                                  shape: BoxShape.circle,
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  '${i + 1}',
+                                  style: TextStyle(
+                                    color: theme.primaryColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                          // Live Student Location Indicator
+                          if (_liveUserLocation != null)
+                            Marker(
+                              point: _liveUserLocation!,
+                              width: 32,
+                              height: 32,
+                              child: _LiveLocationMarker(),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+
+                  // Map Info overlay card
+                  Positioned(
+                    left: 10,
+                    top: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: (isDark ? const Color(0xFF1E293B) : Colors.white).withOpacity(0.92),
+                        borderRadius: BorderRadius.circular(10),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.wifi_tethering_rounded, color: Colors.tealAccent.shade700, size: 14),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Confidence: ${widget.confidenceScore.toStringAsFixed(0)}%',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white70 : Colors.black87,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Direction north pointer
+                  Positioned(
+                    right: 10,
+                    top: 10,
+                    child: FloatingActionButton.small(
+                      onPressed: () => _mapController.move(center, 19.5),
+                      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                      child: Icon(Icons.my_location_rounded, color: theme.primaryColor),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── GIS Interactive Calibration Dashboard (HUD) ───────────────────
+            if (widget.interactive && widget.onGeometryChanged != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                color: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
+                child: Column(
+                  children: [
+                    // Horizontal parameter sliders / increments
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        // Adjust Length
+                        _buildMetricAdjuster(
+                          title: 'Width (W)',
+                          value: '${widget.widthMeters.toStringAsFixed(1)}m',
+                          onSub: () => _tweakGeometry(dWidth: -0.5),
+                          onAdd: () => _tweakGeometry(dWidth: 0.5),
+                        ),
+                        // Adjust Width
+                        _buildMetricAdjuster(
+                          title: 'Length (L)',
+                          value: '${widget.lengthMeters.toStringAsFixed(1)}m',
+                          onSub: () => _tweakGeometry(dLength: -0.5),
+                          onAdd: () => _tweakGeometry(dLength: 0.5),
+                        ),
+                        // Adjust Rotation
+                        _buildMetricAdjuster(
+                          title: 'Yaw/Heading',
+                          value: '${widget.rotationDegrees.toStringAsFixed(0)}°',
+                          onSub: () => _tweakGeometry(dRotation: -5.0),
+                          onAdd: () => _tweakGeometry(dRotation: 5.0),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    
+                    // Fine-tune displacement coordinates arrow keys
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'MOVE ROOM CENTER:',
+                          style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.grey),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildDisplaceButton(Icons.arrow_back_rounded, () => _shiftCenterMeters(-0.3, 0.0)),
+                        _buildDisplaceButton(Icons.arrow_upward_rounded, () => _shiftCenterMeters(0.0, 0.3)),
+                        _buildDisplaceButton(Icons.arrow_downward_rounded, () => _shiftCenterMeters(0.0, -0.3)),
+                        _buildDisplaceButton(Icons.arrow_forward_rounded, () => _shiftCenterMeters(0.3, 0.0)),
+                      ],
                     ),
                   ],
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(ThemeData theme, bool isDark) {
+    return Container(
+      height: widget.height,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : Colors.grey.shade200,
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.map_rounded,
+              color: theme.disabledColor.withOpacity(0.4),
+              size: 56,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Awaiting GPS Center Lock',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.disabledColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Stand in the middle of the room and calibrate.\nThe generated geofence boundary will appear.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.disabledColor.withOpacity(0.7),
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
 
-          // 4. Bottom HUD Info Card
-          Positioned(
-            left: 8,
-            bottom: 8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: (isDark ? const Color(0xFF1E293B) : Colors.white).withOpacity(0.9),
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 8,
-                  )
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'SPATIAL AREA',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: theme.disabledColor,
-                        ),
-                      ),
-                      Text(
-                        reconstructed != null
-                            ? '${reconstructed.areaSqMeters.toStringAsFixed(1)} m²'
-                            : 'Pending (4 Corners)',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: theme.primaryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'PERIMETER',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: theme.disabledColor,
-                        ),
-                      ),
-                      Text(
-                        reconstructed != null
-                            ? '${reconstructed.perimeter.toStringAsFixed(1)} meters'
-                            : '${corners.length}/4 corners',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'QUALITY',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: theme.disabledColor,
-                        ),
-                      ),
-                      Text(
-                        reconstructed != null
-                            ? '${reconstructed.qualityScore.toStringAsFixed(0)}%'
-                            : 'CALIBRATING',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: reconstructed != null && reconstructed.qualityScore >= 80
-                              ? Colors.tealAccent.shade400
-                              : Colors.orangeAccent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+  Widget _buildMetricAdjuster({
+    required String title,
+    required String value,
+    required VoidCallback onSub,
+    required VoidCallback onAdd,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.grey),
             ),
-          ),
-        ],
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                _buildSmallCircleButton(Icons.remove_rounded, onSub),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    value,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                _buildSmallCircleButton(Icons.add_rounded, onAdd),
+              ],
+            )
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSmallCircleButton(IconData icon, VoidCallback onTap) {
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(),
+        icon: Icon(icon, size: 14),
+        onPressed: onTap,
+        style: IconButton.styleFrom(
+          backgroundColor: const Color(0xFF1E293B),
+          foregroundColor: Colors.white,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDisplaceButton(IconData icon, VoidCallback onTap) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 3),
+      width: 28,
+      height: 28,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(),
+        icon: Icon(icon, size: 14),
+        onPressed: onTap,
+        style: IconButton.styleFrom(
+          backgroundColor: const Color(0xFF1E293B),
+          foregroundColor: Colors.tealAccent,
+        ),
       ),
     );
   }
 }
 
-class _GridPainter extends CustomPainter {
-  final Color gridColor;
-  _GridPainter({required this.gridColor});
-
+// ─── Live Location Marker Widget ──────────────────────────────────────────
+class _LiveLocationMarker extends StatefulWidget {
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = gridColor
-      ..strokeWidth = 1.0;
-
-    const spacing = 18.0;
-    for (double x = 0; x < size.width; x += spacing) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += spacing) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  State<_LiveLocationMarker> createState() => _LiveLocationMarkerState();
 }
 
-class _BlueprintPainter extends CustomPainter {
-  final List<RoomCornerReading> corners;
-  final ReconstructedRoom? reconstructed;
-  final Color primaryColor;
-  final Color accentColor;
-  final bool isDark;
-
-  _BlueprintPainter({
-    required this.corners,
-    required this.reconstructed,
-    required this.primaryColor,
-    required this.accentColor,
-    required this.isDark,
-  });
+class _LiveLocationMarkerState extends State<_LiveLocationMarker> with SingleTickerProviderStateMixin {
+  late AnimationController _anim;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    if (corners.isEmpty) return;
-
-    // 1. Calculate bounding box of coordinates to fit and center the blueprint
-    double minLat = double.infinity;
-    double maxLat = -double.infinity;
-    double minLng = double.infinity;
-    double maxLng = -double.infinity;
-
-    for (final c in corners) {
-      if (c.latitude < minLat) minLat = c.latitude;
-      if (c.latitude > maxLat) maxLat = c.latitude;
-      if (c.longitude < minLng) minLng = c.longitude;
-      if (c.longitude > maxLng) maxLng = c.longitude;
-    }
-
-    double latSpan = maxLat - minLat;
-    double lngSpan = maxLng - minLng;
-    if (latSpan == 0) latSpan = 0.0001;
-    if (lngSpan == 0) lngSpan = 0.0001;
-
-    // We add padding so the lines don't clip at the canvas edge
-    const padding = 45.0;
-    final drawWidth = size.width - (padding * 2);
-    final drawHeight = size.height - (padding * 2) - 40; // Shift up to clear bottom HUD
-
-    // 2. Normalize and project points
-    List<Offset> screenPoints = [];
-    final activeCornersList = reconstructed != null ? reconstructed!.orderedCorners : corners;
-
-    for (final c in activeCornersList) {
-      double normX = padding + ((c.longitude - minLng) / lngSpan) * drawWidth;
-      double normY = padding + (1.0 - ((c.latitude - minLat) / latSpan)) * drawHeight;
-      screenPoints.add(Offset(normX, normY));
-    }
-
-    // 3. Draw Polygon Wall fills
-    final fillPaint = Paint()
-      ..color = primaryColor.withOpacity(0.08)
-      ..style = PaintingStyle.fill;
-
-    final wallPaint = Paint()
-      ..color = primaryColor
-      ..strokeWidth = 3.5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    final path = Path();
-    if (screenPoints.isNotEmpty) {
-      path.moveTo(screenPoints[0].dx, screenPoints[0].dy);
-      for (int i = 1; i < screenPoints.length; i++) {
-        path.lineTo(screenPoints[i].dx, screenPoints[i].dy);
-      }
-      if (corners.length == 4) {
-        path.close();
-      }
-    }
-
-    if (screenPoints.length > 1) {
-      canvas.drawPath(path, fillPaint);
-      canvas.drawPath(path, wallPaint);
-    }
-
-    // 4. Draw edge length labels in meters (only if reconstructed coordinates exist)
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    if (reconstructed != null && screenPoints.length == 4) {
-      for (int i = 0; i < 4; i++) {
-        final p1 = screenPoints[i];
-        final p2 = screenPoints[(i + 1) % 4];
-        final midPt = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
-        
-        final wallLen = reconstructed!.wallLengths[i];
-        textPainter.text = TextSpan(
-          text: '${wallLen.toStringAsFixed(1)}m',
-          style: TextStyle(
-            color: isDark ? Colors.tealAccent.shade400 : Colors.teal.shade800,
-            fontSize: 9.5,
-            fontWeight: FontWeight.bold,
-            backgroundColor: (isDark ? const Color(0xFF0F172A) : Colors.white).withOpacity(0.8),
-          ),
-        );
-        textPainter.layout();
-        // Shift label slightly away from midpoint to prevent wall overlap
-        canvas.drawCircle(midPt, 2.0, Paint()..color = Colors.tealAccent);
-        textPainter.paint(
-          canvas, 
-          Offset(midPt.dx - (textPainter.width / 2), midPt.dy - (textPainter.height / 2) - 8),
-        );
-      }
-    }
-
-    // 5. Draw Centroid Mark
-    if (screenPoints.length == 4) {
-      double sumX = 0;
-      double sumY = 0;
-      for (final pt in screenPoints) {
-        sumX += pt.dx;
-        sumY += pt.dy;
-      }
-      final centerPt = Offset(sumX / 4, sumY / 4);
-      final centerPaint = Paint()..color = Colors.tealAccent.shade700;
-
-      canvas.drawCircle(centerPt, 4.0, centerPaint);
-      canvas.drawCircle(
-        centerPt,
-        9.0,
-        Paint()
-          ..color = Colors.tealAccent.shade700.withOpacity(0.3)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
-      );
-    }
-
-    // 6. Draw Corner Markers with dynamic indices
-    final markerFillPaint = Paint()..color = const Color(0xFF1E293B);
-    final markerBorderPaint = Paint()
-      ..color = accentColor
-      ..strokeWidth = 2.0;
-
-    for (int i = 0; i < screenPoints.length; i++) {
-      final pt = screenPoints[i];
-      canvas.drawCircle(
-        pt,
-        9.0,
-        Paint()
-          ..color = accentColor.withOpacity(0.25)
-          ..style = PaintingStyle.fill,
-      );
-      canvas.drawCircle(pt, 6.0, markerFillPaint);
-      canvas.drawCircle(pt, 6.0, markerBorderPaint..style = PaintingStyle.stroke);
-
-      textPainter.text = TextSpan(
-        text: '${i + 1}',
-        style: TextStyle(
-          color: accentColor,
-          fontSize: 9.0,
-          fontWeight: FontWeight.bold,
-        ),
-      );
-      textPainter.layout();
-      textPainter.paint(
-        canvas,
-        Offset(pt.dx - (textPainter.width / 2), pt.dy - (textPainter.height / 2)),
-      );
-    }
+  void initState() {
+    super.initState();
+    _anim = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
   }
 
   @override
-  bool shouldRepaint(covariant _BlueprintPainter oldDelegate) {
-    return oldDelegate.corners.length != corners.length ||
-        oldDelegate.primaryColor != primaryColor ||
-        oldDelegate.accentColor != accentColor ||
-        oldDelegate.isDark != isDark;
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (context, child) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 12 + (_anim.value * 20),
+              height: 12 + (_anim.value * 20),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue.withOpacity(1.0 - _anim.value),
+              ),
+            ),
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: Colors.blue,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

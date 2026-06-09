@@ -207,6 +207,12 @@ class AdminDashboardScreen extends ConsumerWidget {
                     route: '/admin/virtual-rooms',
                   ),
                   const _QuickActionCard(
+                    label: 'Room Validation',
+                    icon: Icons.science_rounded,
+                    color: AppColors.accent,
+                    route: '/admin/virtual-rooms/validate',
+                  ),
+                  const _QuickActionCard(
                     label: 'Subjects',
                     icon: Icons.menu_book_rounded,
                     color: AppColors.warning,
@@ -275,7 +281,7 @@ class _QuickActionCard extends StatelessWidget {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
-        onTap: () => context.go(route),
+        onTap: () => context.push(route),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(

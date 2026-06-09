@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/config/api_config.dart';
 import '../../core/network/dio_client.dart';
+import '../../core/services/room_presence_service.dart';
 
 // ── Geo check state ────────────────────────────────────────
 abstract class GeoState {}
@@ -61,12 +62,18 @@ class _MarkAttendanceScreenState
     // Auto-check location on screen open
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkLocation();
+      if (widget.session['room_id'] != null) {
+        ref.read(roomPresenceProvider.notifier).startPresenceTracking(
+          widget.session['room_id'].toString(),
+        );
+      }
     });
   }
 
   @override
   void dispose() {
     _bounceCtrl.dispose();
+    ref.read(roomPresenceProvider.notifier).stopPresenceTracking();
     super.dispose();
   }
 
@@ -186,6 +193,55 @@ class _MarkAttendanceScreenState
 
             // ── Session info card ────────────────────
             _SessionInfoCard(session: widget.session),
+
+            // ── Live Geofence Heartbeat Card ──────────
+            Consumer(
+              builder: (context, ref, _) {
+                final presence = ref.watch(roomPresenceProvider);
+                if (!presence.isTracking) return const SizedBox.shrink();
+                
+                return Container(
+                  margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: presence.isInside
+                        ? AppColors.success.withOpacity(0.08)
+                        : AppColors.danger.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: presence.isInside
+                          ? AppColors.success.withOpacity(0.2)
+                          : AppColors.danger.withOpacity(0.2),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: presence.isInside ? AppColors.success : AppColors.danger,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          presence.isInside
+                              ? 'Inside Geofence: Active occupancy verified ✓'
+                              : 'Outside Geofence: Please move inside the classroom (${presence.distanceToBoundary.toStringAsFixed(1)}m away).',
+                          style: TextStyle(
+                            color: presence.isInside ? AppColors.success : AppColors.danger,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
 
             // ── Main body ────────────────────────────
             Expanded(

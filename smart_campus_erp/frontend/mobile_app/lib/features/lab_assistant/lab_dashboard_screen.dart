@@ -11,6 +11,9 @@ class LabDashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return AppLayout(
       title: 'Lab Assistant Dashboard',
       child: SingleChildScrollView(
@@ -18,47 +21,80 @@ class LabDashboardScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Laboratory Operations',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+                color: isDark ? AppColors.darkTextPrimary : AppColors.textPrimary,
+                letterSpacing: -0.5,
+              ),
             ),
             const SizedBox(height: 24),
             
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-              childAspectRatio: 1.5,
-              children: [
-                StatCard(
-                  label: 'Assigned Labs',
-                  value: '3',
-                  icon: Icons.biotech_rounded,
-                  accentColor: AppColors.primaryLight,
-                ),
-                StatCard(
-                  label: 'Pending Calibrations',
-                  value: '1',
-                  icon: Icons.compass_calibration_rounded,
-                  accentColor: AppColors.warning,
-                ),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isWide = constraints.maxWidth > 600;
+                return isWide
+                    ? Row(
+                        children: [
+                          Expanded(
+                            child: StatCard(
+                              label: 'Assigned Labs',
+                              value: '3',
+                              icon: Icons.biotech_rounded,
+                              accentColor: AppColors.primaryLight,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: StatCard(
+                              label: 'Pending Calibrations',
+                              value: '1',
+                              icon: Icons.compass_calibration_rounded,
+                              accentColor: AppColors.warning,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          StatCard(
+                            label: 'Assigned Labs',
+                            value: '3',
+                            icon: Icons.biotech_rounded,
+                            accentColor: AppColors.primaryLight,
+                          ),
+                          const SizedBox(height: 16),
+                          StatCard(
+                            label: 'Pending Calibrations',
+                            value: '1',
+                            icon: Icons.compass_calibration_rounded,
+                            accentColor: AppColors.warning,
+                          ),
+                        ],
+                      );
+              },
             ),
             
-            const SizedBox(height: 32),
-            const Text(
+            const SizedBox(height: 36),
+            Text(
               'Spatial Management',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: isDark ? AppColors.darkTextPrimary : AppColors.textPrimary,
+                letterSpacing: -0.2,
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             _buildActionCard(
               context,
               title: 'Virtual Room Capture',
               subtitle: 'Walk and mark boundaries for new labs/classrooms.',
               icon: Icons.layers_outlined,
               color: AppColors.success,
+              isDark: isDark,
               onTap: () => context.push('/virtual-rooms'),
             ),
             const SizedBox(height: 16),
@@ -68,6 +104,7 @@ class LabDashboardScreen extends ConsumerWidget {
               subtitle: 'Verify signal strength and GPS accuracy in labs.',
               icon: Icons.track_changes_rounded,
               color: AppColors.accent,
+              isDark: isDark,
               onTap: () {},
             ),
           ],
@@ -76,36 +113,84 @@ class LabDashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildActionCard(BuildContext context, {required String title, required String subtitle, required IconData icon, required Color color, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: AppColors.cardBg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.borderColor),
+  Widget _buildActionCard(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required bool isDark,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCardBg : AppColors.cardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? AppColors.darkBorderColor : AppColors.borderColor,
+          width: 1.2,
         ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: color.withOpacity(0.1), shape: BoxShape.circle),
-              child: Icon(icon, color: color),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.2 : 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          hoverColor: color.withOpacity(0.04),
+          splashColor: color.withOpacity(0.08),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          color: isDark ? AppColors.darkTextPrimary : AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: isDark ? AppColors.darkTextSecondary : AppColors.textSecondary,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: isDark ? AppColors.darkTextSecondary : AppColors.textSecondary,
+                  size: 20,
+                ),
+              ],
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  Text(subtitle, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: AppColors.textSecondary),
-          ],
+          ),
         ),
       ),
     );

@@ -274,6 +274,48 @@ class CreateSessionView(APIView):
             is_active=True,
         ).count()
 
+        # ── TEACHER LOCATION VALIDATION (CRITICAL SECURITY) ────────────────
+        # Teacher MUST be physically inside the room polygon to start a session.
+        # This is the server-side enforcement — never trust frontend alone.
+        
+        if not t_lat or not t_lng:
+            return Response(
+                {'error': 'Teacher GPS coordinates are required to start a session. '
+                          'Please ensure Location permission is granted.'},
+                status=400,
+            )
+
+        # Re-validate teacher is inside the room polygon right now
+        geo = check_inside_room(
+            student_lat=float(t_lat),
+            student_lng=float(t_lng),
+            student_alt=float(t_alt),
+            room=room,
+            gps_accuracy=float(t_acc),
+        )
+
+        if not geo['is_valid']:
+            return Response(
+                {
+                    'error': (
+                        f'You must be physically inside "{room.name}" to start a session. '
+                        f'Distance to room boundary: {geo["distance_to_boundary"]:.1f}m. '
+                        f'Please walk to the classroom first.'
+                    ),
+                    'step_failed': 'teacher_geofence',
+                    'distance_to_boundary': geo['distance_to_boundary'],
+                    'validation_mode': geo['validation_mode'],
+                },
+                status=403,
+            )
+
+        logger.info(
+            'SESSION CREATE: teacher=%s room=%s | inside=%s mode=%s dist_centre=%.1fm',
+            request.user.email, room.name,
+            geo['inside_2d'], geo['validation_mode'], geo['distance_to_centre'],
+        )
+        # ── END TEACHER LOCATION VALIDATION ────────────────────────────────
+
         session = AttendanceSession.objects.create(
             college            = request.user.college,
             subject_allocation = allocation,
@@ -402,7 +444,7 @@ class ActiveSessionsView(APIView):
                 'subject_allocation__division',
                 'virtual_room',
             ).filter(
-                status = 'active',
+                status__in = ['active', 'paused'],
                 college = user.college,
                 subject_allocation__division = student_division,
                 actual_start__gt = now - timezone.timedelta(minutes=10)
@@ -443,6 +485,7 @@ class ActiveSessionsView(APIView):
                 if is_eligible:
                     data = AttendanceSessionSerializer(s).data
                     data['already_marked'] = s.id in marked_session_ids
+                    data['is_paused'] = s.status == 'paused'
                     result.append(data)
 
             return Response(result)
@@ -453,7 +496,7 @@ class ActiveSessionsView(APIView):
                 'subject_allocation__division',
                 'virtual_room',
             ).filter(
-                status  = 'active',
+                status__in  = ['active', 'paused'],
                 teacher = user,
             )
             return Response(
@@ -468,7 +511,7 @@ class ActiveSessionsView(APIView):
                 'virtual_room',
                 'teacher',
             ).filter(
-                status  = 'active',
+                status__in  = ['active', 'paused'],
                 college = user.college,
             )
             sessions = filter_by_assigned_department(user, sessions, 'subject_allocation__division__course__department')
@@ -484,7 +527,7 @@ class ActiveSessionsView(APIView):
                 'virtual_room',
                 'teacher',
             ).filter(
-                status  = 'active',
+                status__in  = ['active', 'paused'],
                 college = user.college,
             )
             return Response(
@@ -798,6 +841,33 @@ class MarkAttendanceView(APIView):
                 {'error': 'You have already marked attendance for this session.'},
                 status=409,
             )
+
+        # ── TELEPORTATION / IMPOSSIBLE MOVEMENT CHECK ──────────────────────
+        from apps.attendance.fraud_detection import detect_impossible_movement
+        from django.utils import timezone as tz
+
+        last_log = AttendanceLog.objects.filter(
+            student=request.user,
+            created_at__gte=tz.now() - tz.timedelta(minutes=5),
+        ).exclude(session=session).order_by('-created_at').first()
+
+        if last_log and last_log.marked_lat and last_log.marked_lng:
+            movement = detect_impossible_movement(
+                float(last_log.marked_lat), float(last_log.marked_lng),
+                last_log.created_at,
+                float(data['lat']), float(data['lng']),
+                tz.now(),
+            )
+            if movement['is_suspicious']:
+                logger.warning(
+                    'TELEPORTATION DETECTED: student=%s speed=%.1f m/s',
+                    request.user.email, movement['speed_mps'],
+                )
+                return Response({
+                    'error': 'Suspicious location detected. Please ensure GPS is accurate.',
+                    'step_failed': 'teleportation',
+                }, status=403)
+        # ── END TELEPORTATION CHECK ─────────────────────────────────────────
 
         # ── STEP 4: Device check ───────────────────────────
         from apps.accounts.models import normalize_device_id

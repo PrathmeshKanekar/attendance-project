@@ -259,10 +259,14 @@ class _NavItemTileState extends ConsumerState<_NavItemTile> {
                 Navigator.of(context).pop();
               }
 
-              // CRITICAL FIX 4: use go() in next frame to allow drawer to start closing
+              // CRITICAL FIX 4: use push() or go() in next frame to allow drawer to start closing
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (context.mounted) {
-                  context.go(widget.item.route);
+                  if (widget.item.route.endsWith('/dashboard')) {
+                    context.go(widget.item.route);
+                  } else {
+                    context.push(widget.item.route);
+                  }
                 }
               });
             },

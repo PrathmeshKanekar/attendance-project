@@ -12,6 +12,9 @@ import '../../features/mark_attendance/presentation/pages/mark_attendance_page.d
 
 import '../../features/student/face_scan_screen.dart';
 import '../../features/reports/presentation/pages/reports_dashboard_page.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import '../network/api_client.dart';
+import '../../features/reports/presentation/cubit/reports_cubit.dart';
 import '../../features/teacher/teacher_dashboard_screen.dart';
 import '../../features/my_sessions/presentation/pages/my_sessions_screen.dart';
 import '../../features/teacher/session_logs_screen.dart';
@@ -35,6 +38,7 @@ import '../../features/virtual_rooms/virtual_rooms_screen.dart';
 import '../../features/virtual_rooms/add_edit_room_screen.dart';
 import '../../features/virtual_rooms/room_detail_screen.dart';
 import '../../features/virtual_rooms/room_preview_screen.dart';
+import '../../features/virtual_rooms/room_validation_screen.dart';
 import '../../features/face_register/face_register_list_screen.dart';
 import '../../features/face_register/face_register_camera_screen.dart';
 import '../../features/notifications/notifications_screen.dart';
@@ -133,7 +137,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/student/subjects',
           builder: (c, s) => const ComingSoonScreen(title: 'My Subjects')),
       GoRoute(path: '/student/report',
-          builder: (c, s) => const ReportsDashboardPage()),
+          builder: (c, s) => BlocProvider<ReportsCubit>(
+                create: (_) => ReportsCubit(ref.read(apiClientProvider)),
+                child: const ReportsDashboardPage(),
+              )),
       GoRoute(path: '/student/notifications',
           builder: (c, s) => const NotificationsScreen()),
 
@@ -143,9 +150,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/teacher/sessions',
           builder: (c, s) => const MySessionsScreen()),
       GoRoute(path: '/teacher/attendance',
-          builder: (c, s) => const ReportsDashboardPage()),
+          builder: (c, s) => BlocProvider<ReportsCubit>(
+                create: (_) => ReportsCubit(ref.read(apiClientProvider)),
+                child: const ReportsDashboardPage(),
+              )),
       GoRoute(path: '/teacher/reports',
-          builder: (c, s) => const ReportsDashboardPage()),
+          builder: (c, s) => BlocProvider<ReportsCubit>(
+                create: (_) => ReportsCubit(ref.read(apiClientProvider)),
+                child: const ReportsDashboardPage(),
+              )),
       GoRoute(path: '/teacher/manual',
           builder: (c, s) => const ComingSoonScreen(title: 'Manual Entry')),
       GoRoute(path: '/teacher/session-logs',
@@ -163,9 +176,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/principal/approvals',
           builder: (c, s) => const ApprovalsScreen()),
       GoRoute(path: '/principal/attendance',
-          builder: (c, s) => const ReportsDashboardPage()),
+          builder: (c, s) => BlocProvider<ReportsCubit>(
+                create: (_) => ReportsCubit(ref.read(apiClientProvider)),
+                child: const ReportsDashboardPage(),
+              )),
       GoRoute(path: '/principal/reports',
-          builder: (c, s) => const ReportsDashboardPage()),
+          builder: (c, s) => BlocProvider<ReportsCubit>(
+                create: (_) => ReportsCubit(ref.read(apiClientProvider)),
+                child: const ReportsDashboardPage(),
+              )),
       GoRoute(path: '/principal/defaulters',
           builder: (c, s) => const DefaultersScreen()),
 
@@ -173,7 +192,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/hod/dashboard',
           builder: (c, s) => const HodDashboardScreen()),
       GoRoute(path: '/hod/reports',
-          builder: (c, s) => const ReportsDashboardPage()),
+          builder: (c, s) => BlocProvider<ReportsCubit>(
+                create: (_) => ReportsCubit(ref.read(apiClientProvider)),
+                child: const ReportsDashboardPage(),
+              )),
       GoRoute(path: '/hod/faculty',
           builder: (c, s) => const ComingSoonScreen(title: 'Faculty')),
       GoRoute(path: '/hod/defaulters',
@@ -201,6 +223,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           builder: (c, s) => const DivisionsScreen()),
       GoRoute(path: '/admin/virtual-rooms',
           builder: (c, s) => const VirtualRoomsScreen()),
+      GoRoute(path: '/admin/virtual-rooms/validate',
+          builder: (c, s) => const RoomValidationScreen()),
       GoRoute(path: '/admin/virtual-rooms/add',
           builder: (c, s) => const AddEditRoomScreen()),
       GoRoute(path: '/admin/virtual-rooms/:roomId',
@@ -218,6 +242,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/virtual-rooms',
           name: '/virtual-rooms',
           builder: (c, s) => const VirtualRoomsScreen()),
+      GoRoute(path: '/virtual-rooms/validate',
+          name: '/virtual-rooms/validate',
+          builder: (c, s) => const RoomValidationScreen()),
       GoRoute(path: '/virtual-rooms/add',
           name: '/virtual-rooms/add',
           builder: (c, s) => const AddEditRoomScreen()),

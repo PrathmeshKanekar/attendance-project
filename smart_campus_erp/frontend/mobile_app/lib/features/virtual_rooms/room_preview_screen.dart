@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/layout/app_layout.dart';
 import 'providers/virtual_room_providers.dart';
 import 'room_preview_widget.dart';
-import 'room_capture_overlay.dart';
-import 'models/virtual_room_model.dart';
 
 class RoomPreviewScreen extends ConsumerWidget {
   final String roomId;
@@ -19,9 +18,9 @@ class RoomPreviewScreen extends ConsumerWidget {
     final room = ref.watch(singleVirtualRoomProvider(roomId));
 
     if (room == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Room Polygon Preview')),
-        body: Center(
+      return AppLayout(
+        title: 'Room Polygon Preview',
+        child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -42,20 +41,16 @@ class RoomPreviewScreen extends ConsumerWidget {
       );
     }
 
-    final readings = room.corners.map((e) => RoomCornerReading(
-      latitude: e.latitude,
-      longitude: e.longitude,
-      altitude: e.altitude,
-      heading: e.heading,
-      accuracy: e.accuracy,
-    )).toList();
+    final centerLat = room.centerLat ?? 0.0;
+    final centerLng = room.centerLng ?? 0.0;
+    final width = (room.spatialMetadata['width_meters'] as num? ?? 10.0).toDouble();
+    final length = (room.spatialMetadata['length_meters'] as num? ?? 12.0).toDouble();
+    final rotation = (room.spatialMetadata['rotation_degrees'] as num? ?? room.orientationDegrees).toDouble();
+    final confidence = (room.spatialMetadata['confidence_score'] as num? ?? room.reconstructionQuality).toDouble();
 
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0B0F19) : Colors.grey.shade50,
-      appBar: AppBar(
-        title: Text('${room.name} boundary shape'),
-      ),
-      body: Padding(
+    return AppLayout(
+      title: '${room.name} boundary shape',
+      child: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -82,9 +77,7 @@ class RoomPreviewScreen extends ConsumerWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          room.centerLat != null && room.centerLng != null
-                              ? '${room.centerLat!.toStringAsFixed(7)}, ${room.centerLng!.toStringAsFixed(7)}'
-                              : 'Not Calculated',
+                          '$centerLat, $centerLng',
                           style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, fontFamily: 'monospace'),
                         ),
                       ],
@@ -98,7 +91,13 @@ class RoomPreviewScreen extends ConsumerWidget {
             // Canvas drawing (takes major space)
             Expanded(
               child: RoomPreviewWidget(
-                corners: readings,
+                centerLat: centerLat,
+                centerLng: centerLng,
+                widthMeters: width,
+                lengthMeters: length,
+                rotationDegrees: rotation,
+                confidenceScore: confidence,
+                interactive: false, // Static preview on this screen
                 height: double.infinity,
               ),
             ),
@@ -118,7 +117,7 @@ class RoomPreviewScreen extends ConsumerWidget {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'This 2D canvas displays the real boundary polygon captured for this room. Corners are sorted by sequence index.',
+                      'This map displays the real-world, high-precision rotated rectangle polygon boundary generated for this room.',
                       style: theme.textTheme.bodySmall?.copyWith(height: 1.3),
                     ),
                   ),

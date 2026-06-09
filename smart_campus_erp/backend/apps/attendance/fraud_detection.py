@@ -1,59 +1,53 @@
-from .models import AttendanceLog
-from apps.accounts.models import DeviceRegistry
-from apps.virtual_rooms.geo_utils import check_inside_room, detect_gps_spoofing
-from django.utils import timezone
+import math
 
-class FraudDetector:
-    @staticmethod
-    def check_duplicate_submission(session_id, student_id):
-        return AttendanceLog.objects.filter(session_id=session_id, student_id=student_id).exists()
+def detect_impossible_movement(
+    prev_lat, prev_lng, prev_time,
+    curr_lat, curr_lng, curr_time,
+) -> dict:
+    """
+    Detects teleportation — movement faster than humanly possible.
+    Returns {'is_suspicious': bool, 'speed_mps': float, 'reason': str}
+    """
+    if not all([prev_lat, prev_lng, prev_time, curr_lat, curr_lng, curr_time]):
+        return {'is_suspicious': False, 'speed_mps': 0.0, 'reason': 'insufficient_data'}
 
-    def check_gps_validity(self, lat, lng, altitude, room):
-        if room is None:
-            return {'inside': False, 'reason': 'No virtual room configured for this session'}
-        return check_inside_room(lat, lng, altitude, room)
+    elapsed_sec = (curr_time - prev_time).total_seconds()
+    if elapsed_sec <= 0:
+        return {'is_suspicious': False, 'speed_mps': 0.0, 'reason': 'zero_time_delta'}
 
-    @staticmethod
-    def check_device_binding(device_id, student_user):
-        # A student must use their registered device
-        return DeviceRegistry.objects.filter(user=student_user, device_id=device_id, is_active=True).exists()
+    R = 6_371_000.0
+    lat1, lat2 = math.radians(prev_lat), math.radians(curr_lat)
+    dlat = math.radians(curr_lat - prev_lat)
+    dlng = math.radians(curr_lng - prev_lng)
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    distance_m = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-    @staticmethod
-    def check_gps_spoofing(lat, lng, student_id):
-        # Get student's last 3 attendance locations across all sessions
-        last_logs = AttendanceLog.objects.filter(student_id=student_id).order_by('-marked_at')[:1]
-        
-        if not last_logs.exists():
-            return {'spoofed': False, 'reason': 'first attendance record'}
-            
-        last_log = last_logs[0]
-        time_diff = (timezone.now() - last_log.marked_at).total_seconds()
-        
-        result = detect_gps_spoofing(
-            lat, lng, 
-            float(last_log.marked_lat) if last_log.marked_lat else None, 
-            float(last_log.marked_lng) if last_log.marked_lng else None, 
-            time_diff
-        )
-        return result
+    speed_mps = distance_m / elapsed_sec
+    MAX_HUMAN_SPEED = 12.0  # ~43 km/h — sprinting limit
 
-    def run_all_checks(self, session, student_user, lat, lng, altitude, device_id):
-        results = {
-            'duplicate': self.check_duplicate_submission(session.id, student_user.id),
-            'gps': self.check_gps_validity(lat, lng, altitude, session.virtual_room),
-            'device': self.check_device_binding(device_id, student_user),
-            'spoofing': self.check_gps_spoofing(lat, lng, student_user.id)
-        }
-        
-        # Consolidation
-        all_passed = (
-            not results['duplicate'] and 
-            results['gps'].get('inside', True) and 
-            results['device'] and 
-            not results['spoofing'].get('spoofed', False)
-        )
-        
+    if speed_mps > MAX_HUMAN_SPEED:
         return {
-            'passed': all_passed,
-            'details': results
+            'is_suspicious': True,
+            'speed_mps': speed_mps,
+            'reason': f'Movement speed {speed_mps:.1f} m/s exceeds human limit',
         }
+    return {'is_suspicious': False, 'speed_mps': speed_mps, 'reason': 'normal'}
+
+
+def check_gps_accuracy_threshold(accuracy: float, threshold: float = 50.0) -> bool:
+    """Returns True if GPS accuracy is acceptable (lower = better)."""
+    return accuracy <= threshold
+
+
+def detect_developer_mode_flags(security_flags: dict) -> bool:
+    """
+    Checks Flutter-reported security flags for developer/mock indicators.
+    Flags are set by the Flutter anti-spoofing service.
+    """
+    if not security_flags:
+        return False
+    suspicious_keys = [
+        'is_mock_location', 'developer_mode', 'usb_debugging',
+        'rooted', 'emulator', 'allow_mock_location',
+    ]
+    return any(security_flags.get(k, False) for k in suspicious_keys)

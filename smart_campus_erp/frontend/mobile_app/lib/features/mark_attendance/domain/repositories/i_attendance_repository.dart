@@ -45,4 +45,6 @@ abstract class IAttendanceRepository {
     required String deviceName,
     required String platform,
   });
+
+  Future<Either<String, Map<String, dynamic>>> getVirtualRoom(String roomId);
 }
