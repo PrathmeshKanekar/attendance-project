@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:flutter_map/flutter_map.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/layout/app_layout.dart';
 import '../../core/network/api_client.dart';
@@ -14,6 +15,37 @@ import 'dart:math' as math;
 
 const double kMinRoomSize = 3.0;   // meters
 const double kMaxRoomSize = 100.0; // meters
+
+class LocationMethod {
+  static const String mapClick    = 'map_click';
+  static const String walkCorner  = 'walk_corner';
+  static const String manual      = 'manual';
+  static const String coordArea   = 'coord_area';
+}
+
+class VirtualRoomFormState {
+  String name = '';
+  String building = '';
+  String department = '';
+  String floorNumber = '0';
+  String capacity = '60';
+  String roomNumber = '';
+  String locationMethod = LocationMethod.mapClick;
+
+  double centerLat = 0.0;
+  double centerLng = 0.0;
+  double widthMeters = 10.0;
+  double lengthMeters = 12.0;
+  double rotationDegrees = 0.0;
+  double gpsAccuracy = 5.0;
+  double gpsHealthScore = 100.0;
+  double confidenceScore = 100.0;
+
+  List<LatLng> corners = []; // exactly 4 corners
+  double areaSqm = 0.0;
+  double perimeterMeters = 0.0;
+  double orientationDegrees = 0.0;
+}
 
 class AddEditRoomScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic>? existingRoom;
@@ -41,7 +73,6 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
   // Selections
   String? _selectedCollegeId;
   String? _selectedCollegeName;
-  String? _selectedLocationMethod = 'gps'; // 'gps' or 'manual'
 
   // Dynamic Department Master state
   List<Map<String, dynamic>> _departments = [];
@@ -50,23 +81,24 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
   String? _selectedDepartmentId;
   String? _selectedDepartmentName;
 
-  // Geometry
-  double _centerLat = 0.0;
-  double _centerLng = 0.0;
-  double _widthMeters = 10.0;
-  double _lengthMeters = 12.0;
-  double _rotationDegrees = 0.0;
-  double _confidenceScore = 100.0;
-  double _gpsAccuracy = 0.0;
-  List<LatLng> _roomPolygonPoints = [];
-  double _roomAreaSqm = 0.0;
+  // Geometry & Form State
+  final VirtualRoomFormState _formState = VirtualRoomFormState();
+  late final List<TextEditingController> _manualCoordsControllers;
+  late final TextEditingController _method4LatController;
+  late final TextEditingController _method4LngController;
+  late final TextEditingController _method4AreaController;
+  LatLng? _userLocationForMap;
+
+  // Walk corner capture state
+  int? _capturingCornerIndex;
+  int _walkReadingsCount = 0;
+  final List<Position> _walkPositions = [];
 
   // Security & Calibration State
   bool _isSaving = false;
   bool _showCaptureOverlay = false;
   final GpsSecurityService _securityService = GpsSecurityService();
   List<GpsSecurityFlag> _detectedGpsFlags = [];
-  double _gpsHealthScore = 100.0;
   bool _gpsIsCalibrated = false;
 
   // Checklist Validation Statuses
@@ -81,38 +113,160 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
   List<Map<String, dynamic>> _serverConflicts = [];
   bool _duplicateCheckDone = false;
 
-  void _recomputePolygon() {
-    if (_centerLat == 0.0 || _centerLng == 0.0) return;
+  void _computePolygonMetrics() {
+    if (_formState.corners.length != 4) {
+      _formState.areaSqm = 0.0;
+      _formState.perimeterMeters = 0.0;
+      return;
+    }
 
-    final center = LatLng(_centerLat, _centerLng);
-    final halfWidthDeg  = (_widthMeters  / 2) / 111320;
-    final halfLengthDeg = (_lengthMeters / 2) / 111320;
+    // 1. Centroid calculation
+    double sumLat = 0.0;
+    double sumLng = 0.0;
+    for (var pt in _formState.corners) {
+      sumLat += pt.latitude;
+      sumLng += pt.longitude;
+    }
+    _formState.centerLat = sumLat / 4.0;
+    _formState.centerLng = sumLng / 4.0;
 
-    // Apply rotation
-    final angleRad = _rotationDegrees * (math.pi / 180);
+    // 2. Sort clockwise around centroid to prevent self-intersection
+    final cx = _formState.centerLat;
+    final cy = _formState.centerLng;
+    _formState.corners.sort((a, b) {
+      final angleA = math.atan2(a.latitude - cx, a.longitude - cy);
+      final angleB = math.atan2(b.latitude - cx, b.longitude - cy);
+      return angleB.compareTo(angleA);
+    });
 
-    final corners = [
-      _rotatePoint(center, -halfWidthDeg, -halfLengthDeg, angleRad),
-      _rotatePoint(center,  halfWidthDeg, -halfLengthDeg, angleRad),
-      _rotatePoint(center,  halfWidthDeg,  halfLengthDeg, angleRad),
-      _rotatePoint(center, -halfWidthDeg,  halfLengthDeg, angleRad),
-    ];
+    // 3. Local Cartesian Projection
+    final double latRad = cx * math.pi / 180.0;
+    const double metersPerDegreeLat = 110574.0;
+    final double metersPerDegreeLng = 111320.0 * math.cos(latRad);
 
-    _roomPolygonPoints = corners;
-    _roomAreaSqm = _widthMeters * _lengthMeters;
+    final localPts = _formState.corners.map((p) {
+      final x = (p.longitude - cy) * metersPerDegreeLng;
+      final y = (p.latitude - cx) * metersPerDegreeLat;
+      return math.Point(x, y);
+    }).toList();
+
+    // 4. Shoelace Formula for Area
+    double shoelaceSum = 0.0;
+    for (int i = 0; i < 4; i++) {
+      final nextIdx = (i + 1) % 4;
+      shoelaceSum += (localPts[i].x * localPts[nextIdx].y) - (localPts[nextIdx].x * localPts[i].y);
+    }
+    _formState.areaSqm = (shoelaceSum.abs()) / 2.0;
+
+    // 5. Perimeter & Side lengths
+    double perimeter = 0.0;
+    final wallLengths = <double>[];
+    for (int i = 0; i < 4; i++) {
+      final nextIdx = (i + 1) % 4;
+      final dx = localPts[nextIdx].x - localPts[i].x;
+      final dy = localPts[nextIdx].y - localPts[i].y;
+      final len = math.sqrt(dx * dx + dy * dy);
+      wallLengths.add(len);
+      perimeter += len;
+    }
+    _formState.perimeterMeters = perimeter;
+
+    // Approximated side lengths
+    _formState.widthMeters = (wallLengths[0] + wallLengths[2]) / 2.0;
+    _formState.lengthMeters = (wallLengths[1] + wallLengths[3]) / 2.0;
+
+    // 6. Orientation (angle of longest side)
+    double maxLen = -1.0;
+    int longestWallIdx = 0;
+    for (int i = 0; i < 4; i++) {
+      if (wallLengths[i] > maxLen) {
+        maxLen = wallLengths[i];
+        longestWallIdx = i;
+      }
+    }
+    final p1 = localPts[longestWallIdx];
+    final p2 = localPts[(longestWallIdx + 1) % 4];
+    final radians = math.atan2(p2.x - p1.x, p2.y - p1.y);
+    _formState.orientationDegrees = (radians * 180.0 / math.pi + 360.0) % 360.0;
+    _formState.rotationDegrees = _formState.orientationDegrees;
+
+    // 7. Quality metrics (convex check & GPS signal check)
+    bool isConvex = true;
+    bool? firstSign;
+    for (int i = 0; i < 4; i++) {
+      final p0 = localPts[i];
+      final p1 = localPts[(i + 1) % 4];
+      final p2 = localPts[(i + 2) % 4];
+      final cross = (p1.x - p0.x) * (p2.y - p1.y) - (p1.y - p0.y) * (p2.x - p1.x);
+      if (firstSign == null) {
+        firstSign = cross > 0;
+      } else {
+        if ((cross > 0) != firstSign) {
+          isConvex = false;
+          break;
+        }
+      }
+    }
+    double quality = 100.0;
+    if (!isConvex) quality -= 30.0;
+    if (_formState.gpsAccuracy > 5.0) {
+      quality -= (_formState.gpsAccuracy - 5.0) * 2.0;
+    }
+    _formState.confidenceScore = quality.clamp(10.0, 100.0);
   }
 
-  LatLng _rotatePoint(LatLng center, double dx, double dy, double angleRad) {
-    final rotatedX = dx * math.cos(angleRad) - dy * math.sin(angleRad);
-    final rotatedY = dx * math.sin(angleRad) + dy * math.cos(angleRad);
-    return LatLng(center.latitude + rotatedY, center.longitude + rotatedX);
+  void _regenerateRotatedRectangleCorners() {
+    if (_formState.centerLat == 0.0 || _formState.centerLng == 0.0) return;
+
+    final double latRad = _formState.centerLat * math.pi / 180.0;
+    const double metersPerDegreeLat = 110574.0;
+    final double metersPerDegreeLng = 111320.0 * math.cos(latRad);
+    
+    final double rotationRad = _formState.rotationDegrees * math.pi / 180.0;
+    final cosRot = math.cos(rotationRad);
+    final sinRot = math.sin(rotationRad);
+    
+    final hw = _formState.widthMeters / 2.0;
+    final hl = _formState.lengthMeters / 2.0;
+    
+    final offsets = [
+      math.Point(hw, hl),
+      math.Point(hw, -hl),
+      math.Point(-hw, -hl),
+      math.Point(-hw, hl),
+    ];
+    
+    _formState.corners = offsets.map((p) {
+      final dx = p.x * cosRot + p.y * sinRot;
+      final dy = -p.x * sinRot + p.y * cosRot;
+      
+      final latOffset = dy / metersPerDegreeLat;
+      final lngOffset = dx / metersPerDegreeLng;
+      
+      return LatLng(_formState.centerLat + latOffset, _formState.centerLng + lngOffset);
+    }).toList();
+  }
+
+  void _loadUserLocation() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      if (mounted) {
+        setState(() {
+          _userLocationForMap = LatLng(pos.latitude, pos.longitude);
+          if (_formState.centerLat == 0.0) {
+            _formState.centerLat = pos.latitude;
+            _formState.centerLng = pos.longitude;
+          }
+        });
+      }
+    } catch (_) {}
   }
 
   @override
   void initState() {
     super.initState();
-    _widthMeters = 10.0.clamp(kMinRoomSize, kMaxRoomSize);
-    _lengthMeters = 12.0.clamp(kMinRoomSize, kMaxRoomSize);
+    _formState.widthMeters = 10.0.clamp(kMinRoomSize, kMaxRoomSize);
+    _formState.lengthMeters = 12.0.clamp(kMinRoomSize, kMaxRoomSize);
 
     _nameController = TextEditingController(text: widget.existingRoom?['name']?.toString() ?? '');
     _buildingController = TextEditingController(text: widget.existingRoom?['building']?.toString() ?? '');
@@ -124,20 +278,59 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
     if (widget.existingRoom != null) {
       _selectedCollegeId = widget.existingRoom!['college']?.toString();
       _selectedDepartmentName = widget.existingRoom!['department']?.toString();
-      _centerLat = (widget.existingRoom!['center_lat'] as num? ?? 0.0).toDouble();
-      _centerLng = (widget.existingRoom!['center_lng'] as num? ?? 0.0).toDouble();
+      _formState.centerLat = (widget.existingRoom!['center_lat'] as num? ?? 0.0).toDouble();
+      _formState.centerLng = (widget.existingRoom!['center_lng'] as num? ?? 0.0).toDouble();
       final spatial = widget.existingRoom!['spatial_metadata'] as Map<String, dynamic>? ?? {};
-      _widthMeters = ((widget.existingRoom!['width_meters'] as num? ?? spatial['width_meters'] as num? ?? 10.0).toDouble()).clamp(kMinRoomSize, kMaxRoomSize);
-      _lengthMeters = ((widget.existingRoom!['length_meters'] as num? ?? spatial['length_meters'] as num? ?? 12.0).toDouble()).clamp(kMinRoomSize, kMaxRoomSize);
-      _rotationDegrees = (widget.existingRoom!['orientation_degrees'] as num? ?? spatial['rotation_degrees'] as num? ?? 0.0).toDouble();
-      _confidenceScore = (widget.existingRoom!['reconstruction_quality'] as num? ?? spatial['confidence_score'] as num? ?? 100.0).toDouble();
-      _gpsAccuracy = (widget.existingRoom!['gps_accuracy'] as num? ?? 5.0).toDouble();
-      _gpsHealthScore = (widget.existingRoom!['gps_health_score'] as num? ?? 100.0).toDouble();
-      _selectedLocationMethod = widget.existingRoom!['location_method']?.toString() ?? 'gps';
-      _gpsIsCalibrated = _centerLat != 0.0;
+      _formState.widthMeters = ((widget.existingRoom!['width_meters'] as num? ?? spatial['width_meters'] as num? ?? 10.0).toDouble()).clamp(kMinRoomSize, kMaxRoomSize);
+      _formState.lengthMeters = ((widget.existingRoom!['length_meters'] as num? ?? spatial['length_meters'] as num? ?? 12.0).toDouble()).clamp(kMinRoomSize, kMaxRoomSize);
+      _formState.rotationDegrees = (widget.existingRoom!['orientation_degrees'] as num? ?? spatial['rotation_degrees'] as num? ?? 0.0).toDouble();
+      _formState.confidenceScore = (widget.existingRoom!['reconstruction_quality'] as num? ?? spatial['confidence_score'] as num? ?? 100.0).toDouble();
+      _formState.gpsAccuracy = (widget.existingRoom!['gps_accuracy'] as num? ?? 5.0).toDouble();
+      _formState.gpsHealthScore = (widget.existingRoom!['gps_health_score'] as num? ?? 100.0).toDouble();
+      
+      final rawMethod = widget.existingRoom!['location_method']?.toString() ?? LocationMethod.mapClick;
+      if (rawMethod == LocationMethod.mapClick || rawMethod == 'method1') {
+        _formState.locationMethod = LocationMethod.mapClick;
+      } else if (rawMethod == LocationMethod.walkCorner || rawMethod == 'method2' || rawMethod == 'gps') {
+        _formState.locationMethod = LocationMethod.walkCorner;
+      } else if (rawMethod == LocationMethod.manual || rawMethod == 'method3') {
+        _formState.locationMethod = LocationMethod.manual;
+      } else if (rawMethod == LocationMethod.coordArea || rawMethod == 'method4') {
+        _formState.locationMethod = LocationMethod.coordArea;
+      } else {
+        _formState.locationMethod = LocationMethod.mapClick;
+      }
+
+      final cornersList = widget.existingRoom!['corners'] as List? ?? [];
+      if (cornersList.isNotEmpty) {
+        _formState.corners = cornersList.map((c) {
+          final lat = (c['latitude'] as num? ?? c['lat'] as num? ?? 0.0).toDouble();
+          final lng = (c['longitude'] as num? ?? c['lng'] as num? ?? 0.0).toDouble();
+          return LatLng(lat, lng);
+        }).toList();
+        _gpsIsCalibrated = true;
+      }
+    } else {
+      _formState.locationMethod = LocationMethod.mapClick;
     }
 
-    _recomputePolygon();
+    _manualCoordsControllers = List.generate(8, (idx) {
+      if (_formState.corners.length == 4) {
+        final cIdx = idx ~/ 2;
+        final isLng = idx % 2 == 1;
+        final c = _formState.corners[cIdx];
+        final val = isLng ? c.longitude : c.latitude;
+        return TextEditingController(text: val != 0.0 ? val.toString() : '');
+      }
+      return TextEditingController();
+    });
+
+    _method4LatController = TextEditingController(text: _formState.centerLat != 0.0 ? _formState.centerLat.toString() : '');
+    _method4LngController = TextEditingController(text: _formState.centerLng != 0.0 ? _formState.centerLng.toString() : '');
+    _method4AreaController = TextEditingController(text: _formState.areaSqm > 0.0 ? _formState.areaSqm.toString() : '120.0');
+
+    _computePolygonMetrics();
+    _loadUserLocation();
 
     // Proactively read logged-in user profile, assign college, and fetch departments on screen load
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -207,50 +400,25 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
     _floorController.dispose();
     _capacityController.dispose();
     _roomNumberController.dispose();
+    _method4LatController.dispose();
+    _method4LngController.dispose();
+    _method4AreaController.dispose();
+    for (var controller in _manualCoordsControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
   // WGS84 Corner Geodetic Matrix Generator
   List<Map<String, dynamic>> _generateBackendCorners() {
-    final double latRad = _centerLat * math.pi / 180.0;
-    const double metersPerDegreeLat = 110574.0;
-    final double metersPerDegreeLng = 111320.0 * math.cos(latRad);
-    
-    final double rotationRad = _rotationDegrees * math.pi / 180.0;
-    final cosRot = math.cos(rotationRad);
-    final sinRot = math.sin(rotationRad);
-    
-    final hw = _widthMeters / 2.0;
-    final hl = _lengthMeters / 2.0;
-    
-    final offsets = [
-      math.Point(hw, hl),
-      math.Point(hw, -hl),
-      math.Point(-hw, -hl),
-      math.Point(-hw, hl),
-    ];
-    
-    return List.generate(4, (idx) {
-      final p = offsets[idx];
-      final dx = p.x * cosRot + p.y * sinRot;
-      final dy = -p.x * sinRot + p.y * cosRot;
-      
-      final latOffset = dy / metersPerDegreeLat;
-      final lngOffset = dx / metersPerDegreeLng;
-      
+    return List.generate(_formState.corners.length, (idx) {
+      final p = _formState.corners[idx];
       return {
-        'lat': _centerLat + latOffset,
-        'lng': _centerLng + lngOffset,
+        'lat': p.latitude,
+        'lng': p.longitude,
         'alt': 0.0,
-        'heading': _rotationDegrees,
-        'accuracy': _gpsAccuracy > 0 ? _gpsAccuracy : 5.0,
-        'gyro_x': 0.0,
-        'gyro_y': 0.0,
-        'gyro_z': 0.0,
-        'accel_x': 0.0,
-        'accel_y': 0.0,
-        'accel_z': 0.0,
-        'direction_label': 'N',
+        'heading': _formState.rotationDegrees,
+        'accuracy': _formState.gpsAccuracy > 0 ? _formState.gpsAccuracy : 5.0,
       };
     });
   }
@@ -272,8 +440,8 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
           'floor': _floorController.text.trim(),
           'room_number': _roomNumberController.text.trim(),
           'room_name': _nameController.text.trim(),
-          'center_lat': _centerLat,
-          'center_lng': _centerLng,
+          'center_lat': _formState.centerLat,
+          'center_lng': _formState.centerLng,
         },
       );
 
@@ -298,7 +466,7 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
 
   // Pre-save checklist conditions
   double _calculateRealTimeArea() {
-    return _widthMeters * _lengthMeters;
+    return _formState.areaSqm;
   }
 
   bool _isFormValid() {
@@ -352,15 +520,18 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
       return;
     }
 
-    if (!_gpsIsCalibrated || _centerLat == 0.0) {
+    if (!_gpsIsCalibrated || _formState.centerLat == 0.0 || _formState.corners.length != 4) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please stabilize the room coordinates first (Step 2).'),
+          content: Text('Please define exactly 4 room corners first (Step 2).'),
           backgroundColor: Colors.redAccent,
         ),
       );
       return;
     }
+
+    // Run duplicate scan right before every save
+    await _checkServerDuplicates();
 
     final hasHardConflict = _serverConflicts.any((c) => c['severity'] == 'hard');
     if (hasHardConflict) {
@@ -383,22 +554,33 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
       'floor_number': int.tryParse(_floorController.text) ?? 0,
       'capacity': int.tryParse(_capacityController.text) ?? 60,
       'room_number': _roomNumberController.text.trim(),
-      'location_method': _selectedLocationMethod,
-      'gps_accuracy': _gpsAccuracy,
-      'gps_health_score': _gpsHealthScore,
-      'width_meters': _widthMeters,
-      'length_meters': _lengthMeters,
+      'location_method': _formState.locationMethod,
+      'gps_accuracy': _formState.locationMethod == LocationMethod.walkCorner
+          ? _formState.gpsAccuracy
+          : null,
+      'gps_health_score': _formState.locationMethod == LocationMethod.walkCorner
+          ? _formState.gpsHealthScore
+          : null,
+      'width_meters': _formState.widthMeters,
+      'length_meters': _formState.lengthMeters,
       'corner_coordinates': corners,
       'college': collegeId,
       'spatial_metadata': {
-        'width_meters': _widthMeters,
-        'length_meters': _lengthMeters,
-        'rotation_degrees': _rotationDegrees,
-        'confidence_score': _confidenceScore,
+        'width_meters': _formState.widthMeters,
+        'length_meters': _formState.lengthMeters,
+        'rotation_degrees': _formState.rotationDegrees,
+        'confidence_score': _formState.confidenceScore,
         'is_rotated_rectangle': true,
         'gps_security_flags_count': _detectedGpsFlags.length,
+        'area_sqm': _formState.areaSqm,
       }
     };
+
+    debugPrint('PAYLOAD location_method: ${payload['location_method']}');
+    debugPrint('PAYLOAD gps_accuracy: ${payload['gps_accuracy']}');
+    debugPrint('PAYLOAD corners count: '
+        '${(payload['corner_coordinates'] as List).length}');
+    debugPrint('PAYLOAD corner[0]: ${(payload['corner_coordinates'] as List)[0]}');
 
     final notifier = ref.read(virtualRoomsProvider.notifier);
     bool success = false;
@@ -492,18 +674,34 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
 
                   final secResult = _securityService.evaluatePosition(rawPos);
 
-                  setState(() {
-                    _centerLat = reading.latitude;
-                    _centerLng = reading.longitude;
-                    _rotationDegrees = reading.heading;
-                    _gpsAccuracy = reading.accuracy;
-                    _gpsHealthScore = secResult.healthScore;
+                  if (_formState.locationMethod == LocationMethod.coordArea) {
+                    _method4LatController.text = reading.latitude.toString();
+                    _method4LngController.text = reading.longitude.toString();
+                    _formState.gpsAccuracy = reading.accuracy;
+                    _formState.gpsHealthScore = secResult.healthScore;
                     _detectedGpsFlags = secResult.flags;
-                    _confidenceScore = secResult.healthScore;
-                    
-                    _gpsIsCalibrated = true;
-                    _showCaptureOverlay = false;
-                  });
+                    _formState.confidenceScore = secResult.healthScore;
+                    _updateMethod4Square();
+                    setState(() {
+                      _showCaptureOverlay = false;
+                    });
+                  } else {
+                    setState(() {
+                      _formState.centerLat = reading.latitude;
+                      _formState.centerLng = reading.longitude;
+                      _formState.rotationDegrees = reading.heading;
+                      _formState.gpsAccuracy = reading.accuracy;
+                      _formState.gpsHealthScore = secResult.healthScore;
+                      _detectedGpsFlags = secResult.flags;
+                      _formState.confidenceScore = secResult.healthScore;
+                      
+                      _regenerateRotatedRectangleCorners();
+                      _computePolygonMetrics();
+                      
+                      _gpsIsCalibrated = true;
+                      _showCaptureOverlay = false;
+                    });
+                  }
 
                   if (!secResult.isSecure) {
                     final warningMsg = secResult.flags.map((f) => f.description).join(', ');
@@ -862,201 +1060,683 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionHeader(theme, 'GPS Lock & Anti-Spoof Stabilization'),
+        _buildSectionHeader(theme, 'GPS Capture & Spatial Alignment Methods'),
         const SizedBox(height: 8.0),
         Text(
-          'Stand in the absolute center of the physical room to calibrate spatial boundaries.',
+          'Select one of the 4 spatial methods to capture and define the 4 room corners.',
           style: theme.textTheme.bodySmall?.copyWith(color: theme.disabledColor),
         ),
         const SizedBox(height: 20.0),
         
-        _buildFormCard(isDark, [
-          // Select Location Method
-          Row(
-            children: [
-              Expanded(
-                child: ChoiceChip(
-                  label: const Text('GPS LOCK'),
-                  selected: _selectedLocationMethod == 'gps',
-                  onSelected: (val) {
-                    setState(() => _selectedLocationMethod = 'gps');
-                  },
-                ),
+        // Method choice selector
+        _buildMethodSelector(theme, isDark),
+        const SizedBox(height: 24.0),
+        
+        // Method content
+        _buildMethodContent(theme, isDark),
+      ],
+    );
+  }
+
+  Widget _buildMethodSelector(ThemeData theme, bool isDark) {
+    final methods = [
+      {'id': LocationMethod.mapClick, 'label': 'Map Click', 'icon': Icons.map_rounded},
+      {'id': LocationMethod.walkCorner, 'label': 'Walk Corners', 'icon': Icons.directions_walk_rounded},
+      {'id': LocationMethod.manual, 'label': 'Manual Input', 'icon': Icons.edit_note_rounded},
+      {'id': LocationMethod.coordArea, 'label': 'Center + Area', 'icon': Icons.aspect_ratio_rounded},
+    ];
+
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
+      childAspectRatio: 2.5,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+      children: methods.map((m) {
+        final isSel = _formState.locationMethod == m['id'];
+        return InkWell(
+          onTap: () {
+            setState(() {
+              _formState.locationMethod = m['id'] as String;
+            });
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              color: isSel ? theme.primaryColor.withOpacity(0.1) : (isDark ? const Color(0xFF1E293B) : Colors.white),
+              border: Border.all(
+                color: isSel ? theme.primaryColor : (isDark ? Colors.white10 : Colors.grey.shade300),
+                width: 1.5,
               ),
-              const SizedBox(width: 12.0),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(m['icon'] as IconData, color: isSel ? theme.primaryColor : Colors.grey, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  m['label'] as String,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: isSel ? theme.primaryColor : (isDark ? Colors.white70 : Colors.black87),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildMethodContent(ThemeData theme, bool isDark) {
+    switch (_formState.locationMethod) {
+      case LocationMethod.mapClick:
+        return _buildMethod1MapClick(theme, isDark);
+      case LocationMethod.walkCorner:
+        return _buildMethod2WalkCorners(theme, isDark);
+      case LocationMethod.manual:
+        return _buildMethod3Manual(theme, isDark);
+      case LocationMethod.coordArea:
+        return _buildMethod4CenterArea(theme, isDark);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildMethod1MapClick(ThemeData theme, bool isDark) {
+    final center = _formState.centerLat != 0.0
+        ? LatLng(_formState.centerLat, _formState.centerLng)
+        : (_userLocationForMap ?? const LatLng(19.076, 72.877));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12.0),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, color: Colors.blueAccent, size: 20),
+              const SizedBox(width: 8),
               Expanded(
-                child: ChoiceChip(
-                  label: const Text('MANUAL ENT.'),
-                  selected: _selectedLocationMethod == 'manual',
-                  onSelected: (val) {
-                    setState(() => _selectedLocationMethod = 'manual');
-                  },
+                child: Text(
+                  'Tap exactly 4 points on the map below in clockwise/counter-clockwise order to define the room corners.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white70 : Colors.blue.shade900,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 24.0),
-
-          if (_selectedLocationMethod == 'gps') ...[
-            Container(
-              padding: const EdgeInsets.all(16.0),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E293B) : Colors.teal.shade50,
-                borderRadius: BorderRadius.circular(16.0),
-                border: Border.all(
-                  color: _gpsIsCalibrated ? Colors.teal : theme.primaryColor.withOpacity(0.3),
-                  width: 1.5,
-                ),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        _gpsIsCalibrated ? Icons.verified_user_rounded : Icons.radar_rounded,
-                        color: _gpsIsCalibrated ? Colors.teal : Colors.orangeAccent,
-                        size: 28.0,
+        ),
+        const SizedBox(height: 16),
+        Container(
+          height: 300,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: isDark ? Colors.white10 : Colors.grey.shade300),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(19),
+            child: Stack(
+              children: [
+                FlutterMap(
+                  options: MapOptions(
+                    initialCenter: center,
+                    initialZoom: 18.0,
+                    onTap: (tapPosition, point) => _handleMapTap(point),
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.smartcampus.erp',
+                    ),
+                    if (_formState.corners.length == 4)
+                      PolygonLayer(
+                        polygons: [
+                          Polygon(
+                            points: _formState.corners,
+                            color: theme.primaryColor.withOpacity(0.2),
+                            borderColor: theme.primaryColor,
+                            borderStrokeWidth: 3.0,
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12.0),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _gpsIsCalibrated ? 'Coordinates Calibrated' : 'GPS Calibration Required',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: _gpsIsCalibrated ? Colors.teal : theme.primaryColor,
+                    MarkerLayer(
+                      markers: [
+                        for (int i = 0; i < _formState.corners.length; i++)
+                          Marker(
+                            point: _formState.corners[i],
+                            width: 30,
+                            height: 30,
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.redAccent,
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                '${i + 1}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 4.0),
-                            Text(
-                              _gpsIsCalibrated
-                                  ? 'Lat: ${_centerLat.toStringAsFixed(6)} / Lng: ${_centerLng.toStringAsFixed(6)}'
-                                  : 'Capture stabilized telemetry from physical device sensors.',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16.0),
-                  ElevatedButton.icon(
-                    onPressed: () => setState(() => _showCaptureOverlay = true),
-                    icon: const Icon(Icons.gps_fixed_rounded, size: 18.0),
-                    label: Text(_gpsIsCalibrated ? 'RE-CALIBRATE ROOM CENTER' : 'CALIBRATE ROOM CENTER'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal.shade700,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 44.0),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16.0),
-
-            // Telemetry Security Health Report Card
-            if (_gpsIsCalibrated) ...[
-              const SizedBox(height: 12.0),
-              Container(
-                padding: const EdgeInsets.all(16.0),
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(16.0),
-                  border: Border.all(color: isDark ? Colors.white10 : Colors.grey.shade200),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Telemetry Security Report',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _gpsHealthScore >= 80 ? Colors.teal.withOpacity(0.15) : Colors.orange.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(12.0),
                           ),
-                          child: Text(
-                            'Score: ${_gpsHealthScore.toStringAsFixed(0)}%',
-                            style: TextStyle(
-                              color: _gpsHealthScore >= 80 ? Colors.teal : Colors.orange,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12.0,
-                            ),
-                          ),
-                        ),
                       ],
                     ),
-                    const SizedBox(height: 12.0),
-                    _buildSecurityCheckRow('Mock location checks', _detectedGpsFlags.isEmpty),
-                    _buildSecurityCheckRow('Accuracy verification (±${_gpsAccuracy.toStringAsFixed(1)}m)', _gpsAccuracy < 35.0),
-                    _buildSecurityCheckRow('Jump protection telemetry', !_detectedGpsFlags.any((f) => f.flagType == 'coordinate_jump')),
-                    _buildSecurityCheckRow('Oscillation shielding', !_detectedGpsFlags.any((f) => f.flagType == 'rapid_oscillation')),
                   ],
+                ),
+                Positioned(
+                  right: 10,
+                  top: 10,
+                  child: FloatingActionButton.small(
+                    onPressed: _loadUserLocation,
+                    backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    child: Icon(Icons.my_location_rounded, color: theme.primaryColor),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Corners Placed: ${_formState.corners.length}/4',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _formState.corners.clear();
+                  _gpsIsCalibrated = false;
+                  _computePolygonMetrics();
+                });
+              },
+              icon: const Icon(Icons.clear_rounded),
+              label: const Text('Clear Clicked Corners'),
+              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _handleMapTap(LatLng point) {
+    if (_formState.corners.length >= 4) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('4 corners already placed. Tap "Clear Clicked Corners" to reset.')),
+      );
+      return;
+    }
+    setState(() {
+      _formState.corners.add(point);
+      if (_formState.corners.length == 4) {
+        _computePolygonMetrics();
+        _gpsIsCalibrated = true;
+      }
+    });
+  }
+
+  Widget _buildMethod2WalkCorners(ThemeData theme, bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12.0),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, color: Colors.blueAccent, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Walk to each corner of the room in physical order and capture. Averages 5 telemetry readings. Blocks accuracy >15m.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white70 : Colors.blue.shade900,
+                  ),
                 ),
               ),
             ],
-          ] else ...[
-            // Manual coordinate fields
-            TextFormField(
-              initialValue: _centerLat.toString(),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Manual Center Latitude *',
-                prefixIcon: Icon(Icons.map_rounded),
-              ),
-              onChanged: (v) {
-                _centerLat = double.tryParse(v) ?? 0.0;
-                _gpsIsCalibrated = _centerLat != 0.0 && _centerLng != 0.0;
-              },
-            ),
-            const SizedBox(height: 16.0),
-            TextFormField(
-              initialValue: _centerLng.toString(),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Manual Center Longitude *',
-                prefixIcon: Icon(Icons.explore_rounded),
-              ),
-              onChanged: (v) {
-                _centerLng = double.tryParse(v) ?? 0.0;
-                _gpsIsCalibrated = _centerLat != 0.0 && _centerLng != 0.0;
-              },
-            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildFormCard(isDark, [
+          for (int i = 1; i <= 4; i++) ...[
+            _buildWalkCornerRow(i, theme, isDark),
+            if (i < 4) const Divider(height: 24),
           ],
         ]),
       ],
     );
   }
 
-  Widget _buildSecurityCheckRow(String label, bool isPass) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Row(
-        children: [
-          Icon(
-            isPass ? Icons.check_circle_outline_rounded : Icons.warning_amber_rounded,
-            color: isPass ? Colors.teal : Colors.amber,
-            size: 18.0,
+  Widget _buildWalkCornerRow(int cornerNum, ThemeData theme, bool isDark) {
+    final hasVal = _formState.corners.length >= cornerNum &&
+        _formState.corners[cornerNum - 1].latitude != 0.0;
+    final latLng = hasVal ? _formState.corners[cornerNum - 1] : null;
+    final isCapturing = _capturingCornerIndex == cornerNum;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Corner $cornerNum',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              const SizedBox(height: 4),
+              if (isCapturing)
+                Text(
+                  'Capturing: $_walkReadingsCount/5 readings...',
+                  style: const TextStyle(color: Colors.orange, fontSize: 12),
+                )
+              else if (latLng != null)
+                Text(
+                  'Lat: ${latLng.latitude.toStringAsFixed(6)}, Lng: ${latLng.longitude.toStringAsFixed(6)}',
+                  style: const TextStyle(color: Colors.teal, fontSize: 12),
+                )
+              else
+                Text(
+                  'Not captured yet',
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+                ),
+            ],
           ),
-          const SizedBox(width: 8.0),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(fontSize: 13.0),
+        ),
+        ElevatedButton.icon(
+          onPressed: _capturingCornerIndex != null
+              ? null
+              : () => _captureWalkCorner(cornerNum),
+          icon: isCapturing
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.gps_fixed_rounded, size: 16),
+          label: Text(isCapturing ? 'CAPTURING' : (hasVal ? 'RE-TAKE' : 'CAPTURE')),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: hasVal ? Colors.teal : theme.primaryColor,
+            foregroundColor: Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _captureWalkCorner(int cornerIndex) async {
+    setState(() {
+      _capturingCornerIndex = cornerIndex;
+      _walkReadingsCount = 0;
+      _walkPositions.clear();
+    });
+
+    try {
+      for (int i = 0; i < 5; i++) {
+        setState(() {
+          _walkReadingsCount = i + 1;
+        });
+
+        final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+          timeLimit: const Duration(seconds: 5),
+        );
+
+        if (pos.accuracy > 15.0) {
+          setState(() {
+            _capturingCornerIndex = null;
+          });
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
+                    SizedBox(width: 8),
+                    Text('Inaccurate GPS Signal'),
+                  ],
+                ),
+                content: Text(
+                  'GPS accuracy is ±${pos.accuracy.toStringAsFixed(1)} m. '
+                  'This exceeds the strict 15 m limit for virtual room certification. '
+                  'Move to an open area, wait for GPS to lock, and try again.'
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return;
+        }
+
+        _walkPositions.add(pos);
+        await Future.delayed(const Duration(seconds: 1));
+      }
+
+      double avgLat = 0.0;
+      double avgLng = 0.0;
+      for (var p in _walkPositions) {
+        avgLat += p.latitude;
+        avgLng += p.longitude;
+      }
+      avgLat /= 5.0;
+      avgLng /= 5.0;
+
+      final newCorner = LatLng(avgLat, avgLng);
+      setState(() {
+        while (_formState.corners.length < cornerIndex) {
+          _formState.corners.add(const LatLng(0.0, 0.0));
+        }
+        _formState.corners[cornerIndex - 1] = newCorner;
+        _capturingCornerIndex = null;
+        
+        if (_formState.corners.length == 4 && !_formState.corners.contains(const LatLng(0.0, 0.0))) {
+          _computePolygonMetrics();
+          _gpsIsCalibrated = true;
+        }
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Corner $cornerIndex captured successfully!'),
+          backgroundColor: Colors.teal,
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _capturingCornerIndex = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error capturing corner: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Widget _buildMethod3Manual(ThemeData theme, bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12.0),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, color: Colors.blueAccent, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Type in exact coordinates (latitude and longitude) for all 4 corners. Validates all 8 fields before applying.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white70 : Colors.blue.shade900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildFormCard(isDark, [
+          for (int i = 0; i < 4; i++) ...[
+            Text(
+              'Corner ${i + 1} *',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _manualCoordsControllers[i * 2],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Latitude',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _manualCoordsControllers[i * 2 + 1],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Longitude',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+          const SizedBox(height: 8),
+          ElevatedButton.icon(
+            onPressed: _applyManualCoordinates,
+            icon: const Icon(Icons.check_rounded),
+            label: const Text('VALIDATE & APPLY CORNERS'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.teal.shade700,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 44),
+            ),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  void _applyManualCoordinates() {
+    final pts = <LatLng>[];
+    for (int i = 0; i < 4; i++) {
+      final latText = _manualCoordsControllers[i * 2].text.trim();
+      final lngText = _manualCoordsControllers[i * 2 + 1].text.trim();
+      
+      if (latText.isEmpty || lngText.isEmpty) {
+        _showManualError('Please fill out both latitude and longitude for Corner ${i + 1}.');
+        return;
+      }
+      final lat = double.tryParse(latText);
+      final lng = double.tryParse(lngText);
+      if (lat == null || lng == null) {
+        _showManualError('Corner ${i + 1} coordinates must be valid numbers.');
+        return;
+      }
+      if (lat < -90.0 || lat > 90.0) {
+        _showManualError('Corner ${i + 1} latitude must be between -90 and 90.');
+        return;
+      }
+      if (lng < -180.0 || lng > 180.0) {
+        _showManualError('Corner ${i + 1} longitude must be between -180 and 180.');
+        return;
+      }
+      if (lat == 0.0 && lng == 0.0) {
+        _showManualError('Corner ${i + 1} coordinates cannot be 0,0.');
+        return;
+      }
+      pts.add(LatLng(lat, lng));
+    }
+
+    setState(() {
+      _formState.corners = pts;
+      _computePolygonMetrics();
+      _gpsIsCalibrated = true;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Manual coordinates successfully validated & applied!'),
+        backgroundColor: Colors.teal,
+      ),
+    );
+  }
+
+  void _showManualError(String msg) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Validation Error'),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildMethod4CenterArea(ThemeData theme, bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12.0),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, color: Colors.blueAccent, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Specify a center point coordinate and total enclosed room area (in square meters). Generates a perfect square aligned to all 4 directions.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white70 : Colors.blue.shade900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildFormCard(isDark, [
+          TextFormField(
+            controller: _method4LatController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Center Latitude *',
+              prefixIcon: Icon(Icons.map_rounded),
+            ),
+            onChanged: (v) => _updateMethod4Square(),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _method4LngController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Center Longitude *',
+              prefixIcon: Icon(Icons.explore_rounded),
+            ),
+            onChanged: (v) => _updateMethod4Square(),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _method4AreaController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Enclosed Area (sqm) *',
+              prefixIcon: Icon(Icons.aspect_ratio_rounded),
+            ),
+            onChanged: (v) => _updateMethod4Square(),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _calibrateCenterFromGps,
+            icon: const Icon(Icons.my_location_rounded),
+            label: const Text('CALIBRATE CENTER FROM LIVE GPS'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: theme.primaryColor,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 44),
+            ),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  void _calibrateCenterFromGps() async {
+    setState(() => _showCaptureOverlay = true);
+  }
+
+  void _updateMethod4Square() {
+    final lat = double.tryParse(_method4LatController.text) ?? 0.0;
+    final lng = double.tryParse(_method4LngController.text) ?? 0.0;
+    final area = double.tryParse(_method4AreaController.text) ?? 120.0;
+    
+    if (lat == 0.0 || lng == 0.0 || area < 3.0 || area > 1200.0) {
+      return;
+    }
+    
+    setState(() {
+      _formState.centerLat = lat;
+      _formState.centerLng = lng;
+      _formState.areaSqm = area;
+      
+      final side = math.sqrt(area);
+      final hs = side / 2.0;
+      
+      final double latRad = lat * math.pi / 180.0;
+      const double metersPerDegreeLat = 110574.0;
+      final double metersPerDegreeLng = 111320.0 * math.cos(latRad);
+      
+      final offsets = [
+        math.Point(hs, hs),   // Corner 1: NE
+        math.Point(hs, -hs),  // Corner 2: SE
+        math.Point(-hs, -hs), // Corner 3: SW
+        math.Point(-hs, hs),  // Corner 4: NW
+      ];
+      
+      _formState.corners = offsets.map((p) {
+        final latOffset = p.y / metersPerDegreeLat;
+        final lngOffset = p.x / metersPerDegreeLng;
+        return LatLng(lat + latOffset, lng + lngOffset);
+      }).toList();
+      
+      _formState.widthMeters = side;
+      _formState.lengthMeters = side;
+      _formState.rotationDegrees = 0.0;
+      
+      _computePolygonMetrics();
+      _gpsIsCalibrated = true;
+    });
   }
 
   // ── STEP 3: Live Map Boundary Preview ──────────────────────────────────────
@@ -1073,21 +1753,22 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
         const SizedBox(height: 16.0),
 
         RoomPreviewWidget(
-          centerLat: _centerLat,
-          centerLng: _centerLng,
-          widthMeters: _widthMeters,
-          lengthMeters: _lengthMeters,
-          rotationDegrees: _rotationDegrees,
-          confidenceScore: _confidenceScore,
-          roomPolygonPoints: _roomPolygonPoints,
+          centerLat: _formState.centerLat,
+          centerLng: _formState.centerLng,
+          widthMeters: _formState.widthMeters,
+          lengthMeters: _formState.lengthMeters,
+          rotationDegrees: _formState.rotationDegrees,
+          confidenceScore: _formState.confidenceScore,
+          roomPolygonPoints: _formState.corners,
           onGeometryChanged: (newLat, newLng, newWidth, newLength, newRotation) {
             setState(() {
-              _centerLat = newLat;
-              _centerLng = newLng;
-              _widthMeters = newWidth.clamp(kMinRoomSize, kMaxRoomSize);
-              _lengthMeters = newLength.clamp(kMinRoomSize, kMaxRoomSize);
-              _rotationDegrees = newRotation;
-              _recomputePolygon();
+              _formState.centerLat = newLat;
+              _formState.centerLng = newLng;
+              _formState.widthMeters = newWidth.clamp(kMinRoomSize, kMaxRoomSize);
+              _formState.lengthMeters = newLength.clamp(kMinRoomSize, kMaxRoomSize);
+              _formState.rotationDegrees = newRotation;
+              _regenerateRotatedRectangleCorners();
+              _computePolygonMetrics();
             });
           },
         ),
@@ -1106,19 +1787,20 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
               const SizedBox(width: 70, child: Text('Width (m)')),
               Expanded(
                 child: Slider(
-                  value: _widthMeters.clamp(kMinRoomSize, kMaxRoomSize),
+                  value: _formState.widthMeters.clamp(kMinRoomSize, kMaxRoomSize),
                   min: kMinRoomSize,
                   max: kMaxRoomSize,
                   divisions: 97,
                   onChanged: (val) {
                     setState(() {
-                      _widthMeters = val.clamp(kMinRoomSize, kMaxRoomSize);
-                      _recomputePolygon();
+                      _formState.widthMeters = val.clamp(kMinRoomSize, kMaxRoomSize);
+                      _regenerateRotatedRectangleCorners();
+                      _computePolygonMetrics();
                     });
                   },
                 ),
               ),
-              Text('${_widthMeters.toStringAsFixed(1)}m'),
+              Text('${_formState.widthMeters.toStringAsFixed(1)}m'),
             ],
           ),
 
@@ -1128,19 +1810,20 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
               const SizedBox(width: 70, child: Text('Length (m)')),
               Expanded(
                 child: Slider(
-                  value: _lengthMeters.clamp(kMinRoomSize, kMaxRoomSize),
+                  value: _formState.lengthMeters.clamp(kMinRoomSize, kMaxRoomSize),
                   min: kMinRoomSize,
                   max: kMaxRoomSize,
                   divisions: 97,
                   onChanged: (val) {
                     setState(() {
-                      _lengthMeters = val.clamp(kMinRoomSize, kMaxRoomSize);
-                      _recomputePolygon();
+                      _formState.lengthMeters = val.clamp(kMinRoomSize, kMaxRoomSize);
+                      _regenerateRotatedRectangleCorners();
+                      _computePolygonMetrics();
                     });
                   },
                 ),
               ),
-              Text('${_lengthMeters.toStringAsFixed(1)}m'),
+              Text('${_formState.lengthMeters.toStringAsFixed(1)}m'),
             ],
           ),
 
@@ -1150,18 +1833,19 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
               const SizedBox(width: 70, child: Text('Yaw (deg)')),
               Expanded(
                 child: Slider(
-                  value: _rotationDegrees.clamp(0.0, 360.0),
+                  value: _formState.rotationDegrees.clamp(0.0, 360.0),
                   min: 0.0,
                   max: 360.0,
                   onChanged: (val) {
                     setState(() {
-                      _rotationDegrees = val.clamp(0.0, 360.0);
-                      _recomputePolygon();
+                      _formState.rotationDegrees = val.clamp(0.0, 360.0);
+                      _regenerateRotatedRectangleCorners();
+                      _computePolygonMetrics();
                     });
                   },
                 ),
               ),
-              Text('${_rotationDegrees.toStringAsFixed(0)}°'),
+              Text('${_formState.rotationDegrees.toStringAsFixed(0)}°'),
             ],
           ),
           const SizedBox(height: 16.0),
@@ -1169,9 +1853,9 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
           // Live readout below sliders
           Center(
             child: Text(
-              'Width: ${_widthMeters.toStringAsFixed(1)} m   '
-              'Length: ${_lengthMeters.toStringAsFixed(1)} m   '
-              'Area: ${_roomAreaSqm.toStringAsFixed(1)} m²',
+              'Width: ${_formState.widthMeters.toStringAsFixed(1)} m   '
+              'Length: ${_formState.lengthMeters.toStringAsFixed(1)} m   '
+              'Area: ${_formState.areaSqm.toStringAsFixed(1)} m²',
               style: const TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 14.0,
@@ -1218,8 +1902,8 @@ class _AddEditRoomScreenState extends ConsumerState<AddEditRoomScreen> {
           ),
           _buildChecklistRow(
             'Coarse GPS Precision Check',
-            _gpsAccuracy <= 35.0 || _selectedLocationMethod == 'manual',
-            'GPS Accuracy: ±${_gpsAccuracy.toStringAsFixed(1)}m (Required: <= 35.0m)',
+            _formState.gpsAccuracy <= 35.0 || _formState.locationMethod == 'manual',
+            'GPS Accuracy: ±${_formState.gpsAccuracy.toStringAsFixed(1)}m (Required: <= 35.0m)',
           ),
 
           const Divider(height: 24.0),

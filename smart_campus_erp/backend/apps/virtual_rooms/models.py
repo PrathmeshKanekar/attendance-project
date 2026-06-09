@@ -13,8 +13,11 @@ class VirtualRoom(models.Model):
         ('deactivated', 'Deactivated'),
     ]
     LOCATION_METHOD_CHOICES = [
-        ('gps', 'GPS Capture'),
-        ('manual', 'Manual Coordinates'),
+        ('gps',         'GPS Capture'),
+        ('manual',      'Manual Coordinates'),
+        ('map_click',   'Map Click'),
+        ('walk_corner', 'Walk Corner'),
+        ('coord_area',  'Coordinate + Area'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -28,7 +31,7 @@ class VirtualRoom(models.Model):
     # ── New creation workflow fields ────────────────────────────────────────
     room_number = models.CharField(max_length=50, blank=True, default='')
     description = models.TextField(blank=True, default='')
-    location_method = models.CharField(max_length=10, choices=LOCATION_METHOD_CHOICES, default='gps')
+    location_method = models.CharField(max_length=20, choices=LOCATION_METHOD_CHOICES, default='gps')
     gps_accuracy = models.FloatField(null=True, blank=True)
     gps_health_score = models.FloatField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')

@@ -17,6 +17,7 @@ import '../../core/services/secure_storage_service.dart';
 import 'providers/virtual_room_providers.dart';
 import 'models/virtual_room_model.dart';
 import 'services/sensor_fusion_service.dart';
+import '../../utils/geofence_utils.dart';
 import 'dart:async'; 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -942,27 +943,11 @@ class _RoomValidationScreenState extends ConsumerState<RoomValidationScreen>
 
   // ── Correct point-in-polygon Ray-Casting algorithm ────────────────────────
   bool _isPointInsidePolygon(LatLng point, List<LatLng> polygon) {
-    int intersections = 0;
-    final int n = polygon.length;
-
-    for (int i = 0; i < n; i++) {
-      final LatLng a = polygon[i];
-      final LatLng b = polygon[(i + 1) % n];
-
-      if (((a.latitude <= point.latitude && point.latitude < b.latitude) ||
-           (b.latitude <= point.latitude && point.latitude < a.latitude)) &&
-          (point.longitude < 
-           (b.longitude - a.longitude) * 
-           (point.latitude - a.latitude) / 
-           (b.latitude - a.latitude) + a.longitude)) {
-        intersections++;
-      }
-    }
-    return (intersections % 2) == 1;
+    return isPointInsidePolygon(point, polygon);
   }
 
   bool _isPointInPolygon(LatLng point, List<LatLng> polygon) {
-    return _isPointInsidePolygon(point, polygon);
+    return isPointInsidePolygon(point, polygon);
   }
 
   double _calculateGisConfidence({
@@ -970,81 +955,31 @@ class _RoomValidationScreenState extends ConsumerState<RoomValidationScreen>
     required double distanceToBoundaryMeters,
     required bool isInsidePolygon,
   }) {
-    // If outside polygon, confidence of being inside = 0
+    // Outside = 0 confidence always
     if (!isInsidePolygon) return 0.0;
 
-    // Accuracy score: 100% at ±1m, 0% at ±50m
-    final double accuracyScore = 
-      ((50.0 - accuracyMeters) / 50.0).clamp(0.0, 1.0) * 100;
+    // Accuracy score: 100% at ±1m, 0% at ±15m (matches 15m accuracy threshold)
+    final double accScore =
+      ((15.0 - accuracyMeters.clamp(0.0, 15.0)) / 15.0) * 70.0;
 
-    // Boundary margin score: how far inside the boundary
-    // More margin = more confident
-    final double marginScore = 
-      (distanceToBoundaryMeters / 10.0).clamp(0.0, 1.0) * 100;
+    // Margin score: how deep inside boundary (up to 10m = full score)
+    final double marginScore =
+      (distanceToBoundaryMeters.clamp(0.0, 10.0) / 10.0) * 30.0;
 
-    // Weighted average: accuracy matters more
-    return (accuracyScore * 0.7) + (marginScore * 0.3);
+    return (accScore + marginScore).clamp(0.0, 100.0);
   }
 
   List<LatLng> _parsePolygonFromGeoJson(Map<String, dynamic> geoJson) {
-    try {
-      if (geoJson.isEmpty) return const [];
-      
-      Map<String, dynamic> geom = geoJson;
-      if (geoJson.containsKey('geometry') && geoJson['geometry'] is Map) {
-        geom = geoJson['geometry'] as Map<String, dynamic>;
-      }
-      
-      if (!geom.containsKey('coordinates')) return const [];
-      final coordinates = geom['coordinates'][0] as List;
-      return coordinates
-        .take(coordinates.length - 1) // remove closing duplicate point
-        .map((c) => LatLng(
-          (c[1] as num).toDouble(), // latitude
-          (c[0] as num).toDouble(), // longitude
-        ))
-        .toList();
-    } catch (e) {
-      debugPrint('⚠️ Error parsing polygon GeoJson: $e');
-      return const [];
-    }
+    return parsePolygonFromRoom({'boundary_geojson': geoJson});
   }
 
   // ── Perpendicular boundary distance math ─────────────────────────────────
   double _distanceToSegment(LatLng p, LatLng a, LatLng b) {
-    final double latMid = (a.latitude + b.latitude) / 2.0;
-    const double metersPerDegreeLat = 110574.0;
-    final double metersPerDegreeLng = 111320.0 * math.cos(latMid * math.pi / 180.0);
-
-    final double px = p.longitude * metersPerDegreeLng;
-    final double py = p.latitude * metersPerDegreeLat;
-    final double ax = a.longitude * metersPerDegreeLng;
-    final double ay = a.latitude * metersPerDegreeLat;
-    final double bx = b.longitude * metersPerDegreeLng;
-    final double by = b.latitude * metersPerDegreeLat;
-
-    final double l2 = (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
-    if (l2 == 0) return math.sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
-
-    double t = ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / l2;
-    t = math.max(0.0, math.min(1.0, t));
-
-    final double projx = ax + t * (bx - ax);
-    final double projy = ay + t * (by - ay);
-
-    return math.sqrt((px - projx) * (px - projx) + (py - projy) * (py - projy));
+    return distanceToSegment(p, a, b);
   }
 
   double _minDistanceToBoundary(LatLng p, List<LatLng> polygon) {
-    if (polygon.length < 3) return double.infinity;
-    double minDistance = double.infinity;
-    int j = polygon.length - 1;
-    for (int i = 0; i < polygon.length; i++) {
-      final double dist = _distanceToSegment(p, polygon[i], polygon[j]);
-      if (dist < minDistance) minDistance = dist;
-      j = i;
-    }
-    return minDistance;
+    return distanceToPolygonBoundary(p, polygon);
   }
 
   void _evaluateGeofence(double lat, double lng, double accuracy) {
@@ -1076,12 +1011,24 @@ class _RoomValidationScreenState extends ConsumerState<RoomValidationScreen>
   }
 
   List<LatLng> _buildPolygonPoints(VirtualRoomModel room) {
-    if (room.boundaryGeoJson.isNotEmpty) {
-      final parsed = _parsePolygonFromGeoJson(room.boundaryGeoJson);
-      if (parsed.isNotEmpty) {
-        return parsed;
+    // ── 1. Try using the shared parsePolygonFromRoom utility first ────────
+    //    This reads room.corners (List<RoomCornerModel>) or boundaryGeoJson.
+    final parsed = parsePolygonFromRoom(room);
+    if (parsed.isNotEmpty) {
+      debugPrint('📐 _buildPolygonPoints: Using parsed corners (${parsed.length} vertices):');
+      for (int i = 0; i < parsed.length; i++) {
+        debugPrint('   Corner $i: lat=${parsed[i].latitude}, lng=${parsed[i].longitude}');
       }
+      return parsed;
     }
+
+    debugPrint('⚠️ _buildPolygonPoints: parsePolygonFromRoom returned empty!');
+    debugPrint('   room.corners.length = ${room.corners.length}');
+    debugPrint('   room.boundaryGeoJson = ${room.boundaryGeoJson}');
+    debugPrint('   Falling back to synthetic polygon from center+dimensions...');
+
+    // ── 2. Fallback to metadata building (center + width + length + rotation)
+    //    WARNING: This synthetic polygon may NOT match the actual stored corners!
     try {
       final centerLat = room.centerLat ?? 0.0;
       final centerLng = room.centerLng ?? 0.0;
@@ -1109,11 +1056,17 @@ class _RoomValidationScreenState extends ConsumerState<RoomValidationScreen>
         math.Point(-hw, hl),
       ];
       
-      return offsets.map((p) {
+      final result = offsets.map((p) {
         final dx = p.x * cosRot + p.y * sinRot;
         final dy = -p.x * sinRot + p.y * cosRot;
         return LatLng(centerLat + (dy / metersPerDegreeLat), centerLng + (dx / metersPerDegreeLng));
       }).toList();
+
+      debugPrint('📐 _buildPolygonPoints: Built synthetic polygon (${result.length} vertices):');
+      for (int i = 0; i < result.length; i++) {
+        debugPrint('   Synthetic Corner $i: lat=${result[i].latitude}, lng=${result[i].longitude}');
+      }
+      return result;
     } catch (e) {
       debugPrint('⚠️ Polygon build failed: $e');
       return const [];
@@ -1833,6 +1786,9 @@ class _RoomValidationScreenState extends ConsumerState<RoomValidationScreen>
                 _RoomSelectorWidget(
                   selectedRoom: _selectedRoom,
                   onRoomSelected: (room) {
+                    // Run algorithm verification on first room select (debug only)
+                    verifyGeofenceAlgorithm();
+
                     setState(() {
                       _selectedRoom = room;
                       _roomCenter = LatLng(room.centerLat ?? 0.0, room.centerLng ?? 0.0);
@@ -1846,6 +1802,26 @@ class _RoomValidationScreenState extends ConsumerState<RoomValidationScreen>
                       _totalInside = 0;
                       _isSessionActive = false;
                     });
+
+                    // ── Diagnostic: log the polygon that will be used for all checks
+                    debugPrint('══════════════════════════════════════════════');
+                    debugPrint('🏠 ROOM SELECTED: ${room.name}');
+                    debugPrint('   corners from model: ${room.corners.length}');
+                    for (int i = 0; i < room.corners.length; i++) {
+                      debugPrint('   model corner[$i]: lat=${room.corners[i].latitude}, lng=${room.corners[i].longitude}');
+                    }
+                    debugPrint('   _roomPolygonPoints.length: ${_roomPolygonPoints.length}');
+                    for (int i = 0; i < _roomPolygonPoints.length; i++) {
+                      debugPrint('   polygon[$i]: lat=${_roomPolygonPoints[i].latitude}, lng=${_roomPolygonPoints[i].longitude}');
+                    }
+                    if (_currentPosition != null) {
+                      final testPt = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+                      final testInside = isPointInsidePolygon(testPt, _roomPolygonPoints);
+                      final testDist = distanceToPolygonBoundary(testPt, _roomPolygonPoints);
+                      debugPrint('   LIVE CHECK: user=(${testPt.latitude}, ${testPt.longitude}) → inside=$testInside, dist=${testDist.toStringAsFixed(2)}m');
+                    }
+                    debugPrint('══════════════════════════════════════════════');
+
                     _fetchRealOccupancy();
                     _checkActiveSession();
                     _startPolling();

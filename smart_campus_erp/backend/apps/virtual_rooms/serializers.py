@@ -84,6 +84,9 @@ class VirtualRoomSerializer(serializers.ModelSerializer):
             if not (-180.0 <= flng <= 180.0):
                 raise serializers.ValidationError(f"Corner {idx + 1} longitude must be between -180 and 180.")
             
+            if flat == 0.0 and flng == 0.0:
+                raise serializers.ValidationError(f"Corner {idx + 1} coordinates cannot be 0,0.")
+            
             pts.append((flat, flng))
 
         # ─── A. Self-Intersection Check ───────────────────────────────────────

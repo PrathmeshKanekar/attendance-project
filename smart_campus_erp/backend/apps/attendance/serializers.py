@@ -24,7 +24,7 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
             'id', 'session_code', 'status',
             'subject_name', 'subject_code',
             'teacher_name', 'division_name', 'division_year',
-            'room_name',
+            'room_name', 'virtual_room',
             'scheduled_start', 'scheduled_end',
             'actual_start', 'actual_end',
             'total_students', 'present_count',
